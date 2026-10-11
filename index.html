@@ -82,6 +82,7 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .mrow .wp{text-align:right;font-size:12px;font-weight:600}
 .mrow .wp.up{color:var(--text)}
 .mrow .wp.down{color:var(--red)}
+.mrow.danger{background:rgba(229,83,75,.12);border-radius:6px;margin:0 -6px;padding:3px 6px}
 .bar{height:5px;background:#33373d;border-radius:3px;overflow:hidden}
 .bar i{display:block;height:100%;border-radius:3px}
 .bar i.up{background:var(--green)}
@@ -133,7 +134,14 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
 </main>
 
 <script>
-const CONFIG = { sleeperUser: 'PMak2323', espnLeague: '1862087001', season: 2026 };
+const CONFIG = {
+  sleeperUser: 'PMak2323',
+  espnLeagues: [
+    {id: '1862087001', type: 'h2h'},
+    {id: '1652301115', type: 'knockout'}
+  ],
+  season: 2026
+};
 const SB = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
 const SUMMARY = id => `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${id}`;
 const PLAYS = (id, page) => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${id}/competitions/${id}/plays?limit=400&page=${page}`;
@@ -344,15 +352,45 @@ async function loadSleeper(proj, week){
   return out;
 }
 
-async function loadEspn(proj){
-  const key = 'es' + CONFIG.espnLeague;
+const espnTeamKey = id => 'gd.espnTeam.' + id;
+function espnMyTeam(id){
+  let v = store.get(espnTeamKey(id), null);
+  // carry over the pick saved before multi-league support
+  if(!v && id === CONFIG.espnLeagues[0].id){ v = store.get('gd.espnTeam', null); if(v) store.set(espnTeamKey(id), v); }
+  return v;
+}
+
+// Sum a player's actual fantasy points for the current scoring period from ESPN roster data
+function espnActual(pl, sp){
+  const s = (pl?.stats || []).find(x => x.scoringPeriodId === sp && x.statSourceId === 0 && x.statSplitTypeId === 1);
+  return s?.appliedTotal || 0;
+}
+
+// Monte Carlo: chance each team avoids finishing last
+function setSurvivePct(teams){
+  const N = 4000, low = new Array(teams.length).fill(0);
+  const gauss = () => { let u = 0, v = 0; while(!u) u = Math.random(); while(!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  for(let i = 0; i < N; i++){
+    let min = Infinity, at = -1;
+    teams.forEach((t, j) => {
+      const f = t.pts + t.rem + Math.sqrt(t.v) * gauss();
+      if(f < min){ min = f; at = j; }
+    });
+    low[at]++;
+  }
+  teams.forEach((t, j) => { t.win = 1 - low[j] / N; });
+}
+
+async function loadEspn(proj, cfg){
+  const key = 'es' + cfg.id;
+  const knockout = cfg.type === 'knockout';
   try{
     const views = ['mTeam','mRoster','mMatchupScore','mScoreboard','mSettings'].map(v => 'view=' + v).join('&');
-    const d = await getJSON(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${CONFIG.season}/segments/0/leagues/${CONFIG.espnLeague}?${views}`);
+    const d = await getJSON(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${CONFIG.season}/segments/0/leagues/${cfg.id}?${views}`);
     const teamName = t => t.name || `${t.location || ''} ${t.nickname || ''}`.trim() || t.abbrev;
     const teams = (d.teams || []).map(t => ({id:String(t.id), name:teamName(t)}));
-    const lg = {key, platform:'ESPN', name: d.settings?.name || 'ESPN League', teams, games:[], myIds:new Set(), oppIds:new Set()};
-    const myId = store.get('gd.espnTeam', null);
+    const lg = {key, platform:'ESPN', knockout, name: d.settings?.name || 'ESPN League', teams, games:[], myIds:new Set(), oppIds:new Set(), espnId: cfg.id};
+    const myId = espnMyTeam(cfg.id);
     if(!myId) return lg;
 
     const abbrById = {};
@@ -362,20 +400,44 @@ async function loadEspn(proj){
       if(pl.defaultPositionId === 16) return proj.byDef[abbrById[String(pl.proTeamId)]] || null;
       return proj.byName[normName(pl.fullName)] || null;
     };
-    const side = s => {
-      const t = (d.teams || []).find(x => String(x.id) === String(s?.teamId));
-      if(!t) return null;
+    const sp = d.scoringPeriodId;
+    const period = d.status?.currentMatchupPeriod || sp;
+    const sched = (d.schedule || []).filter(m => m.matchupPeriodId === period);
+    const schedSide = id => {
+      for(const m of sched){
+        if(String(m.home?.teamId) === id) return m.home;
+        if(String(m.away?.teamId) === id) return m.away;
+      }
+      return null;
+    };
+    const build = (t, s) => {
       const rec = t.record?.overall;
       const entries = t.roster?.entries || [];
-      const starters = entries.filter(e => e.lineupSlotId !== 20 && e.lineupSlotId !== 21).map(e => projFor(e.playerPoolEntry?.player));
+      const start = entries.filter(e => e.lineupSlotId !== 20 && e.lineupSlotId !== 21);
+      const actual = start.reduce((sum, e) => sum + espnActual(e.playerPoolEntry?.player, sp), 0);
       return {
-        name: teamName(t), record: rec ? `${rec.wins}-${rec.losses}` : '',
-        pts: s.totalPointsLive ?? s.totalPoints ?? 0, ...remaining(starters),
-        mine: String(t.id) === myId, ids: new Set(entries.map(e => String(e.playerId)))
+        id: String(t.id), name: teamName(t), record: rec ? `${rec.wins}-${rec.losses}` : '',
+        pts: s?.totalPointsLive ?? s?.totalPoints ?? actual, ...remaining(start.map(e => projFor(e.playerPoolEntry?.player))),
+        mine: String(t.id) === myId, ids: new Set(entries.map(e => String(e.playerId))), starters: start.length
       };
     };
-    const period = d.status?.currentMatchupPeriod || d.scoringPeriodId;
-    lg.games = (d.schedule || []).filter(m => m.matchupPeriodId === period && m.home && m.away).map(m => {
+
+    if(knockout){
+      // Alive = teams on this week's schedule; if ESPN doesn't list any, fall back to teams with a set lineup
+      let alive = (d.teams || []).filter(t => schedSide(String(t.id)));
+      if(!alive.length) alive = (d.teams || []).filter(t => (t.roster?.entries || []).some(e => e.lineupSlotId !== 20 && e.lineupSlotId !== 21));
+      const list = alive.map(t => build(t, schedSide(String(t.id))));
+      setSurvivePct(list);
+      list.sort((a, b) => b.win - a.win || (b.pts + b.rem) - (a.pts + a.rem));
+      const me = list.find(t => t.mine);
+      return Object.assign(lg, {ko: list, me, myIds: me?.ids || new Set()});
+    }
+
+    const side = s => {
+      const t = (d.teams || []).find(x => String(x.id) === String(s?.teamId));
+      return t ? build(t, s) : null;
+    };
+    lg.games = sched.filter(m => m.home && m.away).map(m => {
       let a = side(m.home), b = side(m.away);
       if(!a || !b) return null;
       if(b.mine){ [a, b] = [b, a]; }
@@ -385,7 +447,7 @@ async function loadEspn(proj){
     const my = lg.games.find(g => g.mine);
     return Object.assign(lg, {me: my?.a, opp: my?.b, myIds: my?.a.ids || new Set(), oppIds: my?.b.ids || new Set()});
   }catch(e){
-    return {key, platform:'ESPN', name:'ESPN League', error:e.message, myIds:new Set(), oppIds:new Set()};
+    return {key, platform:'ESPN', knockout, name: knockout ? 'ESPN Knockout' : 'ESPN League', error:e.message, myIds:new Set(), oppIds:new Set()};
   }
 }
 
@@ -393,11 +455,11 @@ async function loadLeagues(){
   const nfl = await getJSON('https://api.sleeper.app/v1/state/nfl');
   const week = nfl.display_week || nfl.week;
   const proj = await loadProjections(week).catch(() => ({bySleeper:{}, byName:{}, byDef:{}}));
-  const [sl, es] = await Promise.all([
+  const [sl, ...es] = await Promise.all([
     loadSleeper(proj, week).catch(e => [{key:'sl', platform:'Sleeper', name:'Sleeper', error:e.message, myIds:new Set(), oppIds:new Set()}]),
-    loadEspn(proj)
+    ...CONFIG.espnLeagues.map(cfg => loadEspn(proj, cfg))
   ]);
-  state.leagues = [...sl, es];
+  state.leagues = [...sl, ...es];
   state.leaguesAt = Date.now();
 }
 
@@ -405,7 +467,7 @@ async function loadLeagues(){
 const hasPlayer = (set, id) => set.has(id) || set.has('n:' + normName(state.athletes[id]?.name));
 function tagsFor(id){
   return state.leagues.map(l => {
-    const short = l.platform === 'ESPN' ? 'ESPN' : 'SLP';
+    const short = l.knockout ? 'KO' : l.platform === 'ESPN' ? 'ESPN' : 'SLP';
     if(hasPlayer(l.myIds, id)) return `<span class="tag me" title="${esc(l.name)}">MINE · ${short}</span>`;
     if(hasPlayer(l.oppIds, id)) return `<span class="tag vs" title="${esc(l.name)}">VS · ${short}</span>`;
     return '';
@@ -427,14 +489,39 @@ function matchupHtml(g, big){
   return `<div class="mu${big ? '' : ' small'}">${row(g.a, g.b, big && g.mine)}${row(g.b, g.a, false)}</div>`;
 }
 
+function koRow(t, danger){
+  const pct = Math.round(t.win * 1000) / 10;
+  const cls = danger ? 'down' : t.win >= 0.5 ? 'up' : 'down';
+  return `<div class="mrow${t.mine ? ' mine' : ''}${danger ? ' danger' : ''}" title="Projected final: ${(t.pts + t.rem).toFixed(1)}">
+    <span class="nm" title="${esc(t.name)}"><span class="tn">${esc(t.name)}</span><span class="rc">(${t.record})</span></span>
+    <b class="lp">${Number(t.pts).toFixed(2)}</b>
+    <span class="wp ${cls}">${pct.toFixed(1)}%</span>
+    <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
+  </div>`;
+}
+
+function koHtml(l){
+  const list = l.ko || [];
+  const open = state.expanded.has(l.key);
+  const last = list.length - 1;
+  // Collapsed: your team plus the bottom 3
+  const shown = open ? list : list.filter((t, i) => t.mine || i >= last - 2);
+  return `<div class="lg">
+    <div class="lhead"><span class="ln">${esc(l.name)} <small>ESPN · Knockout · ${list.length} alive</small></span><span>Live Pts</span><span>Survive %</span></div>
+    ${shown.map(t => koRow(t, list.indexOf(t) === last)).join('')}
+    ${list.length > shown.length || open ? `<a class="all" data-expand="${l.key}">${open ? 'Show less' : `All teams (${list.length})`}</a>` : ''}
+  </div>`;
+}
+
 function renderLeagues(){
   $('leagues').classList.remove('muted');
   $('leagues').innerHTML = state.leagues.map(l => {
     if(l.error) return `<div class="lg"><h3>${esc(l.name)}<small>${l.platform}</small></h3><div class="muted">Couldn't load: ${esc(l.error)}</div></div>`;
     if(l.platform === 'ESPN' && !l.me){
-      return `<div class="lg"><h3>${esc(l.name)}<small>ESPN</small></h3><div class="muted">Which team is yours?</div>
-        <select id="espnPick"><option value="">Pick your team</option>${(l.teams || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>`;
+      return `<div class="lg"><h3>${esc(l.name)}<small>ESPN${l.knockout ? ' · Knockout' : ''}</small></h3><div class="muted">Which team is yours?</div>
+        <select class="espnPick" data-league="${l.espnId}"><option value="">Pick your team</option>${(l.teams || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>`;
     }
+    if(l.knockout) return koHtml(l);
     const mine = (l.games || []).find(g => g.mine);
     const others = (l.games || []).filter(g => !g.mine);
     const open = state.expanded.has(l.key);
@@ -445,12 +532,11 @@ function renderLeagues(){
       ${open ? `<div class="others">${others.map(g => matchupHtml(g, false)).join('')}</div>` : ''}
     </div>`;
   }).join('') || '<div class="muted">No leagues found.</div>';
-  const pick = $('espnPick');
-  if(pick) pick.onchange = async e => {
+  document.querySelectorAll('.espnPick').forEach(sel => sel.onchange = async e => {
     if(!e.target.value) return;
-    store.set('gd.espnTeam', e.target.value);
+    store.set(espnTeamKey(e.target.dataset.league), e.target.value);
     await loadLeagues(); render();
-  };
+  });
 }
 
 /* ---------- fantasy scoring ---------- */
