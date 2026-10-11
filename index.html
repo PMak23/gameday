@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game Day</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#17191c;--panel:#1d2024;--card:#1f2226;--line:#33373d;--text:#e8e9eb;--muted:#9aa0a6;
+  --green:#5cc37a;--red:#e5534b;--accent:#3b8eea;--gold:#e0b84f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:Poppins,system-ui,sans-serif;font-size:14px}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 16px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{margin:0;font-size:20px;font-weight:700;letter-spacing:.3px}
+h1 span{color:var(--muted);font-weight:500;font-size:13px;margin-left:8px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+select,button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font:inherit;font-size:13px;cursor:pointer}
+button.on{border-color:var(--accent);color:var(--accent)}
+.status{font-size:12px;color:var(--muted)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.3}}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;padding:16px;max-width:1300px;margin:0 auto}
+@media (max-width:900px){main{grid-template-columns:1fr}aside{order:-1}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
+.card.new{animation:flash 2.5s ease-out}
+@keyframes flash{from{border-color:var(--accent);box-shadow:0 0 0 2px rgba(59,142,234,.35)}}
+.card.score{border-color:#5a4a1e}
+.chead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px 8px;gap:10px}
+.ptype{font-weight:700;font-size:16px;color:#c9ccd0;letter-spacing:.3px}
+.card.score .ptype{color:var(--gold)}
+.ctime{color:var(--muted);font-size:13px;text-align:right}
+.prow{display:flex;align-items:center;padding:6px 16px;gap:12px;position:relative}
+.prow::before{content:"";position:absolute;inset:0 40% 0 0;background:linear-gradient(90deg,var(--tc,transparent),transparent);opacity:.35;pointer-events:none}
+.prow img{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#2a2e33;flex:none;position:relative}
+.pinfo{flex:1;min-width:0;position:relative}
+.pname{font-weight:500;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pmeta{color:var(--muted);font-size:12px}
+.pts,.tot{text-align:right;width:70px;position:relative}
+.pts b{display:block;font-size:15px;color:var(--green)}
+.pts b.neg{color:var(--red)}
+.tot{border-left:1px solid var(--line);padding-left:12px;width:82px}
+.tot b{display:block;font-size:15px}
+.pts small,.tot small{color:var(--muted);font-size:11px}
+.desc{border-top:1px solid var(--line);padding:12px 16px;line-height:1.5;margin-top:8px}
+.desc .dd{font-weight:600}
+aside .box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
+.game{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;cursor:pointer;gap:8px}
+.game:hover,.game.sel{background:#2a2e33}
+.game .tm{display:flex;flex-direction:column;gap:2px}
+.game .tm div{display:flex;gap:8px;align-items:center}
+.game img{width:20px;height:20px}
+.game .sc{font-weight:600;min-width:22px;text-align:right}
+.game .st{color:var(--muted);font-size:12px;text-align:right}
+.game .st.live{color:var(--green)}
+.muted{color:var(--muted)}
+.empty{text-align:center;color:var(--muted);padding:40px 16px}
+.more{display:block;margin:0 auto 20px}
+.err{background:#3a1f1f;border:1px solid #6b2d2d;color:#f2b8b5;padding:10px 14px;border-radius:8px;margin-bottom:14px;display:none}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>Game Day <span id="wk"></span></h1>
+    <div class="status" id="status">Loading…</div>
+  </div>
+  <div class="filters">
+    <select id="fGame"><option value="all">All Games</option></select>
+    <select id="fPos">
+      <option value="all">All Positions</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option>
+    </select>
+    <select id="fScoring">
+      <option value="1">PPR</option><option value="0.5">Half PPR</option><option value="0">Standard</option>
+    </select>
+    <select id="fPassTd">
+      <option value="4">4 pt Pass TD</option><option value="6">6 pt Pass TD</option>
+    </select>
+    <button id="fFantasy" class="on">Fantasy plays only</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="err" id="err"></div>
+    <div id="feed"></div>
+    <button class="more" id="more" style="display:none">Load more plays</button>
+  </section>
+  <aside>
+    <div class="box">
+      <h2>Games</h2>
+      <div id="games" class="muted">Loading…</div>
+    </div>
+    <div class="box">
+      <h2>My Leagues</h2>
+      <div class="muted">Sleeper and ESPN sync coming next.</div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const SB = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
+const SUMMARY = id => `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${id}`;
+const PLAYS = (id, page) => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${id}/competitions/${id}/plays?limit=400&page=${page}`;
+const ATHLETE = id => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/athletes/${id}`;
+const HEADSHOT = id => `https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${id}.png&w=96&h=96&scale=crop`;
+const POS = {1:'WR',7:'TE',8:'QB',9:'RB',10:'FB',22:'K'};
+const POLL_MS = 20000;
+const PAGE = 120;
+
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+
+const state = {
+  games: {},          // id -> {id, away, home, state, detail, date}
+  plays: {},          // gameId -> raw play items
+  athletes: store.get('gd.ath', {}), // id -> {name, team}
+  summaryAt: {},
+  seen: new Set(),
+  firstRender: true,
+  shown: PAGE,
+  settings: Object.assign({rec:1, passTd:4, game:'all', pos:'all', fantasy:true}, store.get('gd.settings', {}))
+};
+
+const $ = id => document.getElementById(id);
+
+async function getJSON(url){
+  const r = await fetch(url, {cache:'no-store'});
+  if(!r.ok) throw new Error(r.status + ' ' + url);
+  return r.json();
+}
+const idFrom = (ref, key) => { const m = (ref||'').match(new RegExp(key + '/(\\d+)')); return m ? m[1] : null; };
+
+/* ---------- data loading ---------- */
+async function loadScoreboard(){
+  const d = await getJSON(SB);
+  $('wk').textContent = d.week ? `Week ${d.week.number}` : '';
+  for(const ev of d.events || []){
+    const c = ev.competitions[0];
+    const side = ha => {
+      const t = c.competitors.find(x => x.homeAway === ha);
+      return {id:t.team.id, abbr:t.team.abbreviation, score:t.score, color:t.team.color, logo:t.team.logo};
+    };
+    state.games[ev.id] = {
+      id: ev.id, date: ev.date, away: side('away'), home: side('home'),
+      state: ev.status.type.state, detail: ev.status.type.shortDetail,
+      done: !!state.games[ev.id]?.done
+    };
+  }
+}
+
+async function loadSummary(id){
+  const d = await getJSON(SUMMARY(id));
+  for(const tp of d.boxscore?.players || []){
+    for(const cat of tp.statistics || []){
+      for(const a of cat.athletes || []){
+        state.athletes[a.athlete.id] = {name:a.athlete.displayName, team:tp.team.abbreviation};
+      }
+    }
+  }
+  state.summaryAt[id] = Date.now();
+}
+
+async function loadPlays(id){
+  let page = 1, items = [];
+  while(true){
+    const d = await getJSON(PLAYS(id, page));
+    items = items.concat(d.items || []);
+    if(page >= (d.pageCount || 1)) break;
+    page++;
+  }
+  state.plays[id] = items;
+}
+
+async function fillMissingAthletes(ids){
+  const missing = [...ids].filter(id => !state.athletes[id]).slice(0, 25);
+  await Promise.all(missing.map(async id => {
+    try{
+      const a = await getJSON(ATHLETE(id));
+      state.athletes[id] = {name:a.displayName, team:null};
+    }catch(e){}
+  }));
+  store.set('gd.ath', state.athletes);
+}
+
+/* ---------- fantasy scoring ---------- */
+function scorePlay(p, s){
+  const t = p.type?.text || '';
+  const txt = p.text || '';
+  if(t === 'Penalty' || (p.isPenalty && /no play/i.test(txt))) return [];
+  const seen = new Set(), parts = [];
+  for(const x of p.participants || []){
+    const id = idFrom(x.athlete?.$ref, 'athletes');
+    const key = id + x.type;
+    if(!id || seen.has(key)) continue;
+    seen.add(key);
+    parts.push({id, type:x.type, pos:POS[idFrom(x.position?.$ref, 'positions')]});
+  }
+  const rows = {};
+  const add = (x, pts) => {
+    if(!x || !x.pos || !pts) return;
+    rows[x.id] = rows[x.id] || {id:x.id, pos:x.pos, delta:0};
+    rows[x.id].delta += pts;
+  };
+  const one = type => parts.find(x => x.type === type);
+  const yd = p.statYardage || 0;
+  const isTD = /Touchdown/.test(t);
+
+  if(t === 'Rush' || t === 'Rushing Touchdown'){
+    add(one('rusher'), yd * 0.1 + (isTD ? 6 : 0));
+  }
+  if(t === 'Pass Reception' || t === 'Passing Touchdown'){
+    add(one('passer'), yd * 0.04 + (isTD ? s.passTd : 0));
+    add(one('receiver'), s.rec + yd * 0.1 + (isTD ? 6 : 0));
+  }
+  if(/Interception/.test(t)) add(one('passer'), -2);
+  if(/Field Goal Good/.test(t)){
+    const m = txt.match(/(\d+)\s*yard field goal/i);
+    const dist = m ? +m[1] : yd;
+    add(one('kicker') || one('fieldGoalKicker'), dist >= 50 ? 5 : dist >= 40 ? 4 : 3);
+  }
+  if(p.pointAfterAttempt?.value === 1 && /extra point is good/i.test(txt)) add(one('patScorer'), 1);
+  if(/(Kickoff|Punt) Return Touchdown/.test(t)) add(one('returner'), 6);
+  if(p.isTurnover && !/Interception/.test(t)){
+    const f = parts.find(x => /fumbl/i.test(x.type));
+    if(f) add(f, -2);
+  }
+  return Object.values(rows).map(r => ({...r, delta: Math.round(r.delta * 100) / 100}));
+}
+
+function label(p){
+  const t = p.type?.text || '';
+  if(t === 'Rush') return 'RUN PLAY';
+  if(t === 'Pass Reception' || t === 'Pass Incompletion') return 'PASS PLAY';
+  if(t === 'Passing Touchdown') return 'PASSING TD';
+  if(t === 'Rushing Touchdown') return 'RUSHING TD';
+  if(/Interception/.test(t)) return 'INTERCEPTION';
+  if(/Field Goal Good/.test(t)) return 'FIELD GOAL';
+  if(/Return Touchdown/.test(t)) return 'RETURN TD';
+  return t.toUpperCase();
+}
+
+function buildFeed(){
+  const s = state.settings, out = [];
+  for(const [gid, items] of Object.entries(state.plays)){
+    const g = state.games[gid];
+    if(!g) continue;
+    const sorted = [...items].sort((a, b) => +a.sequenceNumber - +b.sequenceNumber);
+    const totals = {};
+    for(const p of sorted){
+      const rows = scorePlay(p, s);
+      rows.forEach(r => { totals[r.id] = Math.round(((totals[r.id] || 0) + r.delta) * 100) / 100; r.total = totals[r.id]; });
+      out.push({p, g, rows, when: Date.parse(p.wallclock || p.modified || 0) || 0, seq: +p.sequenceNumber});
+    }
+  }
+  return out.sort((a, b) => b.when - a.when || b.seq - a.seq);
+}
+
+/* ---------- rendering ---------- */
+function clock(p){
+  const n = p.period?.number;
+  const q = n > 4 ? 'OT' : 'Q' + n;
+  return `${q} ${p.clock?.displayValue || ''}`;
+}
+const fmt = n => (n > 0 ? '+' : '') + n.toFixed(2);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render(){
+  const s = state.settings;
+  let feed = buildFeed();
+  if(s.game !== 'all') feed = feed.filter(x => x.g.id === s.game);
+  if(s.pos !== 'all') feed = feed.map(x => ({...x, rows: x.rows.filter(r => r.pos === s.pos)}));
+  if(s.fantasy || s.pos !== 'all') feed = feed.filter(x => x.rows.length);
+
+  const html = feed.slice(0, state.shown).map(({p, g, rows}) => {
+    const isNew = !state.firstRender && !state.seen.has(p.id);
+    state.seen.add(p.id);
+    const tm = abbr => abbr === g.away.abbr ? g.away : g.home;
+    const people = rows.map(r => {
+      const a = state.athletes[r.id] || {};
+      const team = a.team || '';
+      const color = team ? '#' + (tm(team).color || '444') : 'transparent';
+      return `<div class="prow" style="--tc:${color}">
+        <img src="${HEADSHOT(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+        <div class="pinfo"><div class="pname">${esc(a.name || 'Player ' + r.id)}</div>
+        <div class="pmeta">${r.pos}${team ? ' - ' + team : ''}</div></div>
+        <div class="pts"><b class="${r.delta < 0 ? 'neg' : ''}">${fmt(r.delta)}</b><small>PTS</small></div>
+        <div class="tot"><b>${r.total.toFixed(2)}</b><small>TOTAL</small></div>
+      </div>`;
+    }).join('');
+    const dd = p.start?.down > 0 ? `<span class="dd">${esc(p.start.shortDownDistanceText)}, ${esc(p.start.possessionText)}</span> ` : '';
+    return `<div class="card${p.scoringPlay ? ' score' : ''}${isNew ? ' new' : ''}">
+      <div class="chead"><div class="ptype">${esc(label(p))}</div>
+      <div class="ctime">${clock(p)} (${g.away.abbr} ${p.awayScore} - ${p.homeScore} ${g.home.abbr})</div></div>
+      ${people}
+      <div class="desc">${dd}${esc(p.text)}</div>
+    </div>`;
+  }).join('');
+
+  $('feed').innerHTML = html || `<div class="empty">No plays yet. The feed fills in once games kick off.</div>`;
+  $('more').style.display = feed.length > state.shown ? 'block' : 'none';
+  state.firstRender = false;
+  renderGames();
+}
+
+function renderGames(){
+  const list = Object.values(state.games).sort((a, b) => {
+    const rank = g => g.state === 'in' ? 0 : g.state === 'pre' ? 1 : 2;
+    return rank(a) - rank(b) || Date.parse(a.date) - Date.parse(b.date);
+  });
+  $('games').innerHTML = list.map(g => `
+    <div class="game${state.settings.game === g.id ? ' sel' : ''}" data-id="${g.id}">
+      <div class="tm">
+        <div><img src="${g.away.logo}" alt=""> ${g.away.abbr}</div>
+        <div><img src="${g.home.logo}" alt=""> ${g.home.abbr}</div>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <div class="tm">${g.state === 'pre' ? '' : `<div class="sc">${g.away.score}</div><div class="sc">${g.home.score}</div>`}</div>
+        <div class="st${g.state === 'in' ? ' live' : ''}">${esc(g.detail)}</div>
+      </div>
+    </div>`).join('') || 'No games this week.';
+
+  const sel = $('fGame'), cur = state.settings.game;
+  sel.innerHTML = '<option value="all">All Games</option>' + list
+    .filter(g => g.state !== 'pre')
+    .map(g => `<option value="${g.id}">${g.away.abbr} @ ${g.home.abbr}</option>`).join('');
+  sel.value = list.some(g => g.id === cur) ? cur : 'all';
+}
+
+/* ---------- loop ---------- */
+async function refresh(){
+  try{
+    await loadScoreboard();
+    const active = Object.values(state.games).filter(g => g.state === 'in' || (g.state === 'post' && !g.done));
+    await Promise.all(active.map(async g => {
+      try{
+        if(!state.summaryAt[g.id] || Date.now() - state.summaryAt[g.id] > 120000) await loadSummary(g.id);
+        await loadPlays(g.id);
+        if(g.state === 'post') g.done = true;
+      }catch(e){ console.warn(e); }
+    }));
+    const ids = new Set();
+    Object.values(state.plays).forEach(items => items.forEach(p => scorePlay(p, state.settings).forEach(r => ids.add(r.id))));
+    await fillMissingAthletes(ids);
+    store.set('gd.ath', state.athletes);
+    render();
+    const live = Object.values(state.games).filter(g => g.state === 'in').length;
+    $('status').innerHTML = live ? `<span class="dot"></span>${live} live · updated ${new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}` : `No live games · updated ${new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
+    $('err').style.display = 'none';
+  }catch(e){
+    console.error(e);
+    $('err').textContent = 'Could not load ESPN data: ' + e.message;
+    $('err').style.display = 'block';
+  }
+}
+
+function bind(){
+  const s = state.settings;
+  $('fScoring').value = String(s.rec);
+  $('fPassTd').value = String(s.passTd);
+  $('fPos').value = s.pos;
+  $('fFantasy').classList.toggle('on', s.fantasy);
+  const save = () => { store.set('gd.settings', s); state.shown = PAGE; render(); };
+  $('fScoring').onchange = e => { s.rec = +e.target.value; save(); };
+  $('fPassTd').onchange = e => { s.passTd = +e.target.value; save(); };
+  $('fPos').onchange = e => { s.pos = e.target.value; save(); };
+  $('fGame').onchange = e => { s.game = e.target.value; save(); };
+  $('fFantasy').onclick = () => { s.fantasy = !s.fantasy; $('fFantasy').classList.toggle('on', s.fantasy); save(); };
+  $('more').onclick = () => { state.shown += PAGE; render(); };
+  $('games').onclick = e => {
+    const el = e.target.closest('.game'); if(!el) return;
+    s.game = s.game === el.dataset.id ? 'all' : el.dataset.id; save();
+  };
+}
+
+bind();
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>
