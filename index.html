@@ -59,6 +59,18 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .muted{color:var(--muted)}
 .empty{text-align:center;color:var(--muted);padding:40px 16px}
 .more{display:block;margin:0 auto 20px}
+.tag{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle}
+.tag.me{background:rgba(92,195,122,.18);color:var(--green)}
+.tag.vs{background:rgba(229,83,75,.18);color:var(--red)}
+.lg{border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.lg h3{margin:0 0 8px;font-size:14px;font-weight:600;display:flex;justify-content:space-between}
+.lg h3 small{color:var(--muted);font-weight:500;font-size:11px}
+.lrow{display:flex;justify-content:space-between;padding:3px 0}
+.lrow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.lrow.mine .nm{font-weight:600}
+.lrow b{font-weight:600}
+.lrow.lead b{color:var(--green)}
+.lg select{width:100%;margin-top:6px}
 .err{background:#3a1f1f;border:1px solid #6b2d2d;color:#f2b8b5;padding:10px 14px;border-radius:8px;margin-bottom:14px;display:none}
 </style>
 </head>
@@ -80,6 +92,7 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
       <option value="4">4 pt Pass TD</option><option value="6">6 pt Pass TD</option>
     </select>
     <button id="fFantasy" class="on">Fantasy plays only</button>
+    <button id="fMine">My matchups only</button>
   </div>
 </header>
 
@@ -96,12 +109,13 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
     </div>
     <div class="box">
       <h2>My Leagues</h2>
-      <div class="muted">Sleeper and ESPN sync coming next.</div>
+      <div id="leagues" class="muted">Loading leagues…</div>
     </div>
   </aside>
 </main>
 
 <script>
+const CONFIG = { sleeperUser: 'PMak2323', espnLeague: '1862087001', season: 2026 };
 const SB = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
 const SUMMARY = id => `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${id}`;
 const PLAYS = (id, page) => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${id}/competitions/${id}/plays?limit=400&page=${page}`;
@@ -124,7 +138,9 @@ const state = {
   seen: new Set(),
   firstRender: true,
   shown: PAGE,
-  settings: Object.assign({rec:1, passTd:4, game:'all', pos:'all', fantasy:true}, store.get('gd.settings', {}))
+  leagues: [],        // {key, name, platform, me, opp, myIds:Set, oppIds:Set, error, teams}
+  leaguesAt: 0,
+  settings: Object.assign({rec:1, passTd:4, game:'all', pos:'all', fantasy:true, mine:false}, store.get('gd.settings', {}))
 };
 
 const $ = id => document.getElementById(id);
@@ -186,6 +202,141 @@ async function fillMissingAthletes(ids){
     }catch(e){}
   }));
   store.set('gd.ath', state.athletes);
+}
+
+/* ---------- league sync ---------- */
+const normName = n => String(n || '').toLowerCase().replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g, '').replace(/[^a-z]/g, '');
+
+// Sleeper id -> [espnId or '', normalized name]
+async function sleeperIdMap(){
+  const cached = store.get('gd.slmap2', null);
+  if(cached && Date.now() - cached.at < 3 * 864e5) return cached.map;
+  const all = await getJSON('https://api.sleeper.app/v1/players/nfl');
+  const map = {};
+  for(const [sid, p] of Object.entries(all)){
+    if(!['QB','RB','WR','TE','K','FB'].includes(p.position)) continue;
+    map[sid] = [p.espn_id ? String(p.espn_id) : '', normName(p.full_name || `${p.first_name} ${p.last_name}`)];
+  }
+  store.set('gd.slmap2', {at: Date.now(), map});
+  return map;
+}
+
+async function loadSleeper(){
+  const out = [];
+  const user = await getJSON(`https://api.sleeper.app/v1/user/${CONFIG.sleeperUser}`);
+  const nfl = await getJSON('https://api.sleeper.app/v1/state/nfl');
+  const week = nfl.display_week || nfl.week;
+  const leagues = await getJSON(`https://api.sleeper.app/v1/user/${user.user_id}/leagues/nfl/${CONFIG.season}`);
+  const map = await sleeperIdMap();
+  for(const lg of leagues){
+    try{
+      const [rosters, users, matchups] = await Promise.all([
+        getJSON(`https://api.sleeper.app/v1/league/${lg.league_id}/rosters`),
+        getJSON(`https://api.sleeper.app/v1/league/${lg.league_id}/users`),
+        getJSON(`https://api.sleeper.app/v1/league/${lg.league_id}/matchups/${week}`)
+      ]);
+      const mine = rosters.find(r => r.owner_id === user.user_id);
+      if(!mine) continue;
+      const myM = matchups.find(m => m.roster_id === mine.roster_id);
+      const oppM = myM && matchups.find(m => m.matchup_id === myM.matchup_id && m.roster_id !== mine.roster_id);
+      const oppR = oppM && rosters.find(r => r.roster_id === oppM.roster_id);
+      const side = (r, m) => {
+        const u = users.find(x => x.user_id === r?.owner_id) || {};
+        return {
+          name: u.metadata?.team_name || u.display_name || 'Team',
+          record: r ? `${r.settings?.wins || 0}-${r.settings?.losses || 0}` : '',
+          pts: m?.points ?? 0
+        };
+      };
+      const ids = list => {
+        const set = new Set();
+        for(const id of list || []){
+          const m = map[id]; if(!m) continue;
+          if(m[0]) set.add(m[0]);
+          if(m[1]) set.add('n:' + m[1]);
+        }
+        return set;
+      };
+      out.push({
+        key: 'sl' + lg.league_id, platform: 'Sleeper', name: lg.name,
+        me: side(mine, myM), opp: oppR ? side(oppR, oppM) : null,
+        myIds: ids(myM?.players || mine.players), oppIds: ids(oppM?.players || oppR?.players)
+      });
+    }catch(e){ out.push({key:'sl' + lg.league_id, platform:'Sleeper', name:lg.name, error:e.message, myIds:new Set(), oppIds:new Set()}); }
+  }
+  return out;
+}
+
+async function loadEspn(){
+  const key = 'es' + CONFIG.espnLeague;
+  try{
+    const views = ['mTeam','mRoster','mMatchupScore','mScoreboard','mSettings'].map(v => 'view=' + v).join('&');
+    const d = await getJSON(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${CONFIG.season}/segments/0/leagues/${CONFIG.espnLeague}?${views}`);
+    const teamName = t => t.name || `${t.location || ''} ${t.nickname || ''}`.trim() || t.abbrev;
+    const teams = (d.teams || []).map(t => ({id:String(t.id), name:teamName(t)}));
+    const lg = {key, platform:'ESPN', name: d.settings?.name || 'ESPN League', teams, myIds:new Set(), oppIds:new Set()};
+    const myId = store.get('gd.espnTeam', null);
+    if(!myId) return lg;
+    const period = d.status?.currentMatchupPeriod || d.scoringPeriodId;
+    const m = (d.schedule || []).find(x => x.matchupPeriodId === period && (String(x.home?.teamId) === myId || String(x.away?.teamId) === myId));
+    const meSide = m && (String(m.home?.teamId) === myId ? m.home : m.away);
+    const oppSide = m && (meSide === m.home ? m.away : m.home);
+    const side = s => {
+      const t = (d.teams || []).find(x => String(x.id) === String(s?.teamId));
+      if(!t) return null;
+      const rec = t.record?.overall;
+      return {
+        name: teamName(t), record: rec ? `${rec.wins}-${rec.losses}` : '',
+        pts: s.totalPointsLive ?? s.totalPoints ?? 0,
+        ids: new Set((t.roster?.entries || []).map(e => String(e.playerId)))
+      };
+    };
+    const me = side(meSide || {teamId: myId}), opp = oppSide ? side(oppSide) : null;
+    return Object.assign(lg, {me, opp, myIds: me?.ids || new Set(), oppIds: opp?.ids || new Set()});
+  }catch(e){
+    return {key, platform:'ESPN', name:'ESPN League', error:e.message, myIds:new Set(), oppIds:new Set()};
+  }
+}
+
+async function loadLeagues(){
+  const [sl, es] = await Promise.all([
+    loadSleeper().catch(e => [{key:'sl', platform:'Sleeper', name:'Sleeper', error:e.message, myIds:new Set(), oppIds:new Set()}]),
+    loadEspn()
+  ]);
+  state.leagues = [...sl, es];
+  state.leaguesAt = Date.now();
+}
+
+// Match by ESPN id first, then by normalized player name
+const hasPlayer = (set, id) => set.has(id) || set.has('n:' + normName(state.athletes[id]?.name));
+function tagsFor(id){
+  return state.leagues.map(l => {
+    const short = l.platform === 'ESPN' ? 'ESPN' : 'SLP';
+    if(hasPlayer(l.myIds, id)) return `<span class="tag me" title="${esc(l.name)}">MINE · ${short}</span>`;
+    if(hasPlayer(l.oppIds, id)) return `<span class="tag vs" title="${esc(l.name)}">VS · ${short}</span>`;
+    return '';
+  }).join('');
+}
+const inMyMatchups = id => state.leagues.some(l => hasPlayer(l.myIds, id) || hasPlayer(l.oppIds, id));
+
+function renderLeagues(){
+  $('leagues').classList.remove('muted');
+  $('leagues').innerHTML = state.leagues.map(l => {
+    if(l.error) return `<div class="lg"><h3>${esc(l.name)}<small>${l.platform}</small></h3><div class="muted">Couldn't load: ${esc(l.error)}</div></div>`;
+    if(l.platform === 'ESPN' && !l.me){
+      return `<div class="lg"><h3>${esc(l.name)}<small>ESPN</small></h3><div class="muted">Which team is yours?</div>
+        <select id="espnPick"><option value="">Pick your team</option>${(l.teams || []).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>`;
+    }
+    const row = (t, mine, lead) => t ? `<div class="lrow${mine ? ' mine' : ''}${lead ? ' lead' : ''}"><span class="nm">${esc(t.name)} <span class="muted">(${t.record})</span></span><b>${Number(t.pts).toFixed(2)}</b></div>` : '';
+    const lead = l.opp ? l.me.pts > l.opp.pts : true;
+    return `<div class="lg"><h3>${esc(l.name)}<small>${l.platform} · Live Pts</small></h3>${row(l.me, true, lead)}${row(l.opp, false, !lead && l.opp)}</div>`;
+  }).join('') || '<div class="muted">No leagues found.</div>';
+  const pick = $('espnPick');
+  if(pick) pick.onchange = async e => {
+    if(!e.target.value) return;
+    store.set('gd.espnTeam', e.target.value);
+    await loadLeagues(); render();
+  };
 }
 
 /* ---------- fantasy scoring ---------- */
@@ -275,7 +426,8 @@ function render(){
   let feed = buildFeed();
   if(s.game !== 'all') feed = feed.filter(x => x.g.id === s.game);
   if(s.pos !== 'all') feed = feed.map(x => ({...x, rows: x.rows.filter(r => r.pos === s.pos)}));
-  if(s.fantasy || s.pos !== 'all') feed = feed.filter(x => x.rows.length);
+  if(s.mine) feed = feed.map(x => ({...x, rows: x.rows.filter(r => inMyMatchups(r.id))}));
+  if(s.fantasy || s.pos !== 'all' || s.mine) feed = feed.filter(x => x.rows.length);
 
   const html = feed.slice(0, state.shown).map(({p, g, rows}) => {
     const isNew = !state.firstRender && !state.seen.has(p.id);
@@ -288,7 +440,7 @@ function render(){
       return `<div class="prow" style="--tc:${color}">
         <img src="${HEADSHOT(r.id)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
         <div class="pinfo"><div class="pname">${esc(a.name || 'Player ' + r.id)}</div>
-        <div class="pmeta">${r.pos}${team ? ' - ' + team : ''}</div></div>
+        <div class="pmeta">${r.pos}${team ? ' - ' + team : ''}${tagsFor(r.id)}</div></div>
         <div class="pts"><b class="${r.delta < 0 ? 'neg' : ''}">${fmt(r.delta)}</b><small>PTS</small></div>
         <div class="tot"><b>${r.total.toFixed(2)}</b><small>TOTAL</small></div>
       </div>`;
@@ -306,6 +458,7 @@ function render(){
   $('more').style.display = feed.length > state.shown ? 'block' : 'none';
   state.firstRender = false;
   renderGames();
+  if(state.leaguesAt) renderLeagues();
 }
 
 function renderGames(){
@@ -336,6 +489,7 @@ function renderGames(){
 async function refresh(){
   try{
     await loadScoreboard();
+    if(Date.now() - state.leaguesAt > 60000) await loadLeagues();
     const active = Object.values(state.games).filter(g => g.state === 'in' || (g.state === 'post' && !g.done));
     await Promise.all(active.map(async g => {
       try{
@@ -371,6 +525,8 @@ function bind(){
   $('fPos').onchange = e => { s.pos = e.target.value; save(); };
   $('fGame').onchange = e => { s.game = e.target.value; save(); };
   $('fFantasy').onclick = () => { s.fantasy = !s.fantasy; $('fFantasy').classList.toggle('on', s.fantasy); save(); };
+  $('fMine').classList.toggle('on', s.mine);
+  $('fMine').onclick = () => { s.mine = !s.mine; $('fMine').classList.toggle('on', s.mine); save(); };
   $('more').onclick = () => { state.shown += PAGE; render(); };
   $('games').onclick = e => {
     const el = e.target.closest('.game'); if(!el) return;
