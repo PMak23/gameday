@@ -700,7 +700,9 @@ function playerBlockRight(p, nameIdx){
 }
 
 function cmpRow(label, a, b, fmt){
-  const max = Math.max(Math.abs(a), Math.abs(b), 0.0001);
+  // Each bar shows that team's share of the combined total, so 50/50 looks even
+  const total = Math.max(0, a) + Math.max(0, b) || 1;
+  const max = total;
   const cls = a >= b ? 'up' : 'down';
   return `<div class="cmp">
     <div class="cb L"><i class="${cls}" style="width:${Math.max(0, a) / max * 100}%"></i></div>
