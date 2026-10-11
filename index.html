@@ -22,7 +22,7 @@ button.on{border-color:var(--accent);color:var(--accent)}
 .status{font-size:12px;color:var(--muted)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:pulse 2s infinite}
 @keyframes pulse{50%{opacity:.3}}
-main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;padding:16px;max-width:1300px;margin:0 auto}
+main{display:grid;grid-template-columns:minmax(0,1fr) 410px;gap:20px;padding:16px;max-width:1300px;margin:0 auto}
 @media (max-width:900px){main{grid-template-columns:1fr}aside{order:-1}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;margin-bottom:14px;overflow:hidden}
 .card.new{animation:flash 2.5s ease-out}
@@ -66,14 +66,16 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .lg select{width:100%;margin-top:6px}
 .lg h3{margin:0 0 8px;font-size:14px;font-weight:600;display:flex;justify-content:space-between}
 .lg h3 small{color:var(--muted);font-weight:500;font-size:11px}
-.lhead,.mrow{display:grid;grid-template-columns:minmax(0,1fr) 56px 50px 56px;gap:6px;align-items:center}
+.lhead,.mrow{display:grid;grid-template-columns:minmax(0,1fr) 54px 48px 44px;gap:6px;align-items:center}
 .lhead{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px}
 .lhead span:nth-child(2){text-align:right}
 .lhead span:nth-child(3){grid-column:3/5;text-align:center}
 .lhead .ln{color:var(--text);font-size:14px}
 .lhead .ln small{color:var(--muted);font-size:10px;font-weight:500;margin-left:4px}
 .mrow{padding:3px 0;font-size:13px}
-.mrow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow .nm{display:flex;min-width:0;gap:4px}
+.mrow .nm .tn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.mrow .nm .rc{flex:none;color:var(--muted)}
 .mrow.mine .nm{font-weight:600}
 .mrow .lp{text-align:right;font-weight:600}
 .mrow .lp.lead{color:var(--green)}
@@ -416,7 +418,7 @@ function matchupHtml(g, big){
     const pct = Math.round(t.win * 1000) / 10;
     const cls = t.win >= 0.5 ? 'up' : 'down';
     return `<div class="mrow${bold ? ' mine' : ''}" title="Projected final: ${(t.pts + t.rem).toFixed(1)}">
-      <span class="nm">${esc(t.name)} <span class="muted">(${t.record})</span></span>
+      <span class="nm" title="${esc(t.name)}"><span class="tn">${esc(t.name)}</span><span class="rc">(${t.record})</span></span>
       <b class="lp ${t.pts > o.pts ? 'lead' : ''}">${Number(t.pts).toFixed(2)}</b>
       <span class="wp ${cls}">${pct.toFixed(1)}%</span>
       <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
