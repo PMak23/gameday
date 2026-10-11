@@ -90,6 +90,51 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .mu.small{border-top:1px solid var(--line);padding-top:6px;margin-top:6px}
 .mu.small .mrow{font-size:12px}
 .all{display:block;text-align:center;color:var(--accent);font-size:12px;margin-top:8px;cursor:pointer;text-decoration:underline}
+.col3{display:none}
+main.three{grid-template-columns:minmax(0,1fr) 380px 480px;max-width:1900px}
+main.three .col3{display:block}
+.mu[data-mu]{cursor:pointer;border-radius:6px}
+.mu[data-mu]:hover,.mu.sel{background:#2a2e33}
+.md{padding:12px}
+.mdtop{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-weight:600}
+.mdtop button{padding:4px 10px;font-size:12px}
+.mdhead{display:grid;grid-template-columns:1fr auto 1fr;align-items:start;gap:8px;margin-bottom:12px}
+.mdhead .R{text-align:right}
+.mdhead .tn2{font-weight:600;font-size:14px}
+.mdhead .muted{font-size:11px}
+.mdhead .vs{align-self:center;font-size:12px}
+.cmps{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px}
+.cmp{display:grid;grid-template-columns:1fr 56px 72px 56px 1fr;gap:6px;align-items:center;padding:4px 0;font-size:12px}
+.cb{height:6px;background:#2a2e33;border-radius:3px;overflow:hidden;display:flex}
+.cb.L{justify-content:flex-end}
+.cb i{display:block;height:100%;background:#5b6068;border-radius:3px}
+.cb i.up{background:var(--green)}
+.cb i.down{background:var(--red)}
+.cv.L{text-align:right}
+.cv.L.up{color:var(--green)}
+.cv.L.down{color:var(--red)}
+.cl{text-align:center;color:var(--text);font-weight:500}
+.slotcard{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;padding:4px 8px}
+.pr{display:grid;grid-template-columns:minmax(0,1fr) 48px 38px 48px minmax(0,1fr);gap:6px;align-items:center;padding:8px 0}
+.pr + .pr{border-top:1px solid #2a2e33}
+.pl{display:flex;gap:8px;align-items:center;min-width:0}
+.pl.R{flex-direction:row-reverse;text-align:right}
+.pl img{width:34px;height:34px;border-radius:50%;object-fit:cover;background:#2a2e33;flex:none}
+.pt{min-width:0}
+.pn{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps{font-size:11px;color:var(--muted);line-height:1.4}
+.ps b{color:var(--text);font-weight:600}
+.livec{color:var(--green)}
+.pp{display:flex;flex-direction:column;font-size:14px}
+.pp.L{text-align:right;align-items:flex-end}
+.pp.R{text-align:left;align-items:flex-start}
+.pp b{font-weight:600}
+.pp small{color:var(--muted);font-size:11px}
+.sb{justify-self:center;font-size:11px;font-weight:700;padding:5px 0;width:38px;text-align:center;border-radius:6px;color:#fff}
+.sb.qb{background:#6b5b95}.sb.rb{background:#2f6db5}.sb.wr{background:#2e7d4f}.sb.te{background:#c0702f}
+.sb.fx{background:#5b6068}.sb.k{background:#4a5565}.sb.bn{background:#33373d;color:var(--muted)}
+.benchhead{text-align:center;font-size:12px;font-weight:700;letter-spacing:2px;color:var(--muted);margin:18px 0 10px;display:flex;align-items:center;gap:10px}
+.benchhead::before,.benchhead::after{content:"";flex:1;border-top:2px dashed var(--line)}
 .err{background:#3a1f1f;border:1px solid #6b2d2d;color:#f2b8b5;padding:10px 14px;border-radius:8px;margin-bottom:14px;display:none}
 </style>
 </head>
@@ -121,16 +166,18 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
     <div id="feed"></div>
     <button class="more" id="more" style="display:none">Load more plays</button>
   </section>
-  <aside>
-    <div class="box">
+  <aside id="side">
+    <div class="box md" id="detail" style="display:none"></div>
+    <div class="box" id="lbox">
       <h2>My Leagues</h2>
       <div id="leagues" class="muted">Loading leagues…</div>
     </div>
-    <div class="box">
+    <div class="box" id="gbox">
       <h2>Games</h2>
       <div id="games" class="muted">Loading…</div>
     </div>
   </aside>
+  <aside id="col3" class="col3"></aside>
 </main>
 
 <script>
@@ -166,6 +213,8 @@ const state = {
   shown: PAGE,
   leagues: [],        // {key, name, platform, me, opp, myIds:Set, oppIds:Set, error, teams}
   leaguesAt: 0,
+  stats: {},          // espn athlete id -> {passing:{...}, rushing:{...}, receiving:{...}, kicking:{...}}
+  openMu: null,       // {key, idx} of the matchup shown in the detail view
   expanded: new Set(),
   settings: Object.assign({rec:1, passTd:4, game:'all', pos:'all', fantasy:true, mine:false}, store.get('gd.settings', {}))
 };
@@ -204,6 +253,9 @@ async function loadSummary(id){
     for(const cat of tp.statistics || []){
       for(const a of cat.athletes || []){
         state.athletes[a.athlete.id] = {name:a.athlete.displayName, team:tp.team.abbreviation};
+        const row = {};
+        (cat.labels || []).forEach((lb, i) => row[lb] = a.stats?.[i]);
+        (state.stats[a.athlete.id] = state.stats[a.athlete.id] || {})[cat.name] = row;
       }
     }
   }
@@ -235,18 +287,20 @@ async function fillMissingAthletes(ids){
 /* ---------- league sync ---------- */
 const normName = n => String(n || '').toLowerCase().replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g, '').replace(/[^a-z]/g, '');
 const teamKey = a => a === 'WAS' ? 'WSH' : a;   // Sleeper uses WAS, ESPN uses WSH
+const shortName = n => { const p = String(n || '').split(' '); return p.length > 1 ? `${p[0][0]}. ${p.slice(1).join(' ')}` : n; };
 
-// Sleeper id -> [espnId or '', normalized name]
+// Sleeper id -> [espnId or '', normalized name, display name, position, team]
 async function sleeperIdMap(){
-  const cached = store.get('gd.slmap2', null);
+  const cached = store.get('gd.slmap3', null);
   if(cached && Date.now() - cached.at < 3 * 864e5) return cached.map;
   const all = await getJSON('https://api.sleeper.app/v1/players/nfl');
   const map = {};
   for(const [sid, p] of Object.entries(all)){
-    if(!['QB','RB','WR','TE','K','FB'].includes(p.position)) continue;
-    map[sid] = [p.espn_id ? String(p.espn_id) : '', normName(p.full_name || `${p.first_name} ${p.last_name}`)];
+    if(!['QB','RB','WR','TE','K','FB','DEF'].includes(p.position)) continue;
+    const name = p.position === 'DEF' ? `${p.last_name} D/ST` : (p.full_name || `${p.first_name} ${p.last_name}`);
+    map[sid] = [p.espn_id ? String(p.espn_id) : '', p.position === 'DEF' ? '' : normName(name), name, p.position, teamKey(p.team || (p.position === 'DEF' ? sid : ''))];
   }
-  store.set('gd.slmap2', {at: Date.now(), map});
+  store.set('gd.slmap3', {at: Date.now(), map});
   return map;
 }
 
@@ -267,9 +321,11 @@ async function loadProjections(week){
   return data;
 }
 
+const gameForTeam = abbr => Object.values(state.games).find(x => x.away.abbr === abbr || x.home.abbr === abbr);
+
 // Share of a team's game still to be played (1 = not started, 0 = final or bye)
 function fracLeft(abbr){
-  const g = Object.values(state.games).find(x => x.away.abbr === abbr || x.home.abbr === abbr);
+  const g = gameForTeam(abbr);
   if(!g) return 0;
   if(g.state === 'pre') return 1;
   if(g.state === 'post') return 0;
@@ -279,14 +335,15 @@ function fracLeft(abbr){
 
 // Remaining projected points and variance from a list of starter projections
 function remaining(projs){
-  let rem = 0, v = 0;
+  let rem = 0, v = 0, mins = 0;
   for(const p of projs){
     if(!p) continue;
     const f = fracLeft(p.team);
     rem += p.pts * f;
     v += Math.pow(0.5 * p.pts, 2) * f;
+    mins += 60 * f;
   }
-  return {rem, v};
+  return {rem, v, mins};
 }
 
 function erf(x){
@@ -301,6 +358,7 @@ function setWinPct(a, b){
   const p = sd < 0.1 ? (margin > 0 ? 1 : margin < 0 ? 0 : 0.5) : 0.5 * (1 + erf(margin / sd / Math.SQRT2));
   a.win = p; b.win = 1 - p;
 }
+const ordinal = n => n + (['th','st','nd','rd'][((n % 100) - 20) % 10] || ['th','st','nd','rd'][n % 100] || 'th');
 
 async function loadSleeper(proj, week){
   const out = [];
@@ -323,14 +381,32 @@ async function loadSleeper(proj, week){
         getJSON(`https://api.sleeper.app/v1/league/${lg.league_id}/users`),
         getJSON(`https://api.sleeper.app/v1/league/${lg.league_id}/matchups/${week}`)
       ]);
+      const places = {};
+      [...rosters].sort((a, b) => (b.settings?.wins || 0) - (a.settings?.wins || 0) || ((b.settings?.fpts || 0) + (b.settings?.fpts_decimal || 0) / 100) - ((a.settings?.fpts || 0) + (a.settings?.fpts_decimal || 0) / 100))
+        .forEach((r, i) => places[r.roster_id] = i + 1);
+      const slots = (lg.roster_positions || []).filter(s => s !== 'BN' && s !== 'IR' && s !== 'TAXI');
+      const player = (id, slot, m) => {
+        const info = map[id] || ['', '', id, '', ''];
+        const p = proj.bySleeper[id];
+        const isDef = info[3] === 'DEF';
+        return {
+          slot, name: info[2], short: isDef ? info[2] : shortName(info[2]), pos: info[3], team: p?.team || info[4],
+          espnId: info[0], norm: info[1],
+          img: isDef ? `https://sleepercdn.com/images/team_logos/nfl/${String(id).toLowerCase()}.png` : `https://sleepercdn.com/content/nfl/players/thumb/${id}.jpg`,
+          pts: m.players_points?.[id] ?? 0, proj: p?.pts ?? 0
+        };
+      };
       const side = m => {
         const r = rosters.find(x => x.roster_id === m.roster_id) || {};
         const u = users.find(x => x.user_id === r.owner_id) || {};
-        const starters = (m.starters || []).filter(id => id && id !== '0').map(id => proj.bySleeper[id]);
+        const startIds = (m.starters || []);
+        const lineup = startIds.map((id, i) => id && id !== '0' ? player(id, slots[i] || 'FLEX', m) : {slot: slots[i] || 'FLEX', empty: true});
+        const bench = (m.players || []).filter(id => !startIds.includes(id)).map(id => player(id, 'BN', m));
+        const starters = startIds.filter(id => id && id !== '0').map(id => proj.bySleeper[id]);
         return {
           name: u.metadata?.team_name || u.display_name || 'Team',
-          record: `${r.settings?.wins || 0}-${r.settings?.losses || 0}`,
-          pts: m.points || 0, ...remaining(starters),
+          record: `${r.settings?.wins || 0}-${r.settings?.losses || 0}`, place: places[r.roster_id],
+          pts: m.points || 0, ...remaining(starters), lineup, bench,
           mine: r.owner_id === user.user_id, ids: ids(m.players || r.players)
         };
       };
@@ -410,12 +486,34 @@ async function loadEspn(proj, cfg){
       }
       return null;
     };
+    const SLOT = {0:'QB',2:'RB',3:'RB/WR',4:'WR',5:'WR/TE',6:'TE',7:'OP',16:'DEF',17:'K',23:'FLEX'};
+    const ORDER = [0,2,3,4,5,6,23,7,16,17];
+    const places = {};
+    [...(d.teams || [])].sort((a, b) => (b.record?.overall?.wins || 0) - (a.record?.overall?.wins || 0) || (b.record?.overall?.pointsFor || 0) - (a.record?.overall?.pointsFor || 0))
+      .forEach((t, i) => places[t.id] = i + 1);
+    const player = (e, slot) => {
+      const pl = e.playerPoolEntry?.player || {};
+      const isDef = pl.defaultPositionId === 16;
+      const abbr = abbrById[String(pl.proTeamId)] || '';
+      const pj = projFor(pl);
+      return {
+        slot, name: pl.fullName || 'Player', short: isDef ? pl.fullName : shortName(pl.fullName),
+        pos: isDef ? 'DEF' : (SLOT[[0,0,2,4,6][pl.defaultPositionId]] || ({5:'K'})[pl.defaultPositionId] || ''),
+        team: pj?.team || abbr, espnId: String(e.playerId), norm: normName(pl.fullName),
+        img: isDef ? `https://a.espncdn.com/i/teamlogos/nfl/500/${abbr.toLowerCase()}.png` : HEADSHOT(e.playerId),
+        pts: espnActual(pl, sp), proj: pj?.pts ?? 0
+      };
+    };
     const build = (t, s) => {
       const rec = t.record?.overall;
       const entries = t.roster?.entries || [];
       const start = entries.filter(e => e.lineupSlotId !== 20 && e.lineupSlotId !== 21);
       const actual = start.reduce((sum, e) => sum + espnActual(e.playerPoolEntry?.player, sp), 0);
+      const rank = id => { const i = ORDER.indexOf(id); return i < 0 ? 99 : i; };
+      const lineup = [...start].sort((a, b) => rank(a.lineupSlotId) - rank(b.lineupSlotId)).map(e => player(e, SLOT[e.lineupSlotId] || 'FLEX'));
+      const bench = entries.filter(e => e.lineupSlotId === 20).map(e => player(e, 'BN'));
       return {
+        lineup, bench, place: places[t.id],
         id: String(t.id), name: teamName(t), record: rec ? `${rec.wins}-${rec.losses}` : '',
         pts: s?.totalPointsLive ?? s?.totalPoints ?? actual, ...remaining(start.map(e => projFor(e.playerPoolEntry?.player))),
         mine: String(t.id) === myId, ids: new Set(entries.map(e => String(e.playerId))), starters: start.length
@@ -475,7 +573,7 @@ function tagsFor(id){
 }
 const inMyMatchups = id => state.leagues.some(l => hasPlayer(l.myIds, id) || hasPlayer(l.oppIds, id));
 
-function matchupHtml(g, big){
+function matchupHtml(g, big, key, idx){
   const row = (t, o, bold) => {
     const pct = Math.round(t.win * 1000) / 10;
     const cls = t.win >= 0.5 ? 'up' : 'down';
@@ -486,7 +584,8 @@ function matchupHtml(g, big){
       <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
     </div>`;
   };
-  return `<div class="mu${big ? '' : ' small'}">${row(g.a, g.b, big && g.mine)}${row(g.b, g.a, false)}</div>`;
+  const sel = state.openMu && state.openMu.key === key && state.openMu.idx === idx;
+  return `<div class="mu${big ? '' : ' small'}${sel ? ' sel' : ''}" data-mu="${key}|${idx}" title="Open matchup">${row(g.a, g.b, big && g.mine)}${row(g.b, g.a, false)}</div>`;
 }
 
 function koRow(t, danger){
@@ -527,9 +626,9 @@ function renderLeagues(){
     const open = state.expanded.has(l.key);
     return `<div class="lg">
       <div class="lhead"><span class="ln">${esc(l.name)} <small>${l.platform}</small></span><span>Live Pts</span><span>Win %</span></div>
-      ${mine ? matchupHtml(mine, true) : '<div class="muted">No matchup this week.</div>'}
+      ${mine ? matchupHtml(mine, true, l.key, l.games.indexOf(mine)) : '<div class="muted">No matchup this week.</div>'}
       ${others.length ? `<a class="all" data-expand="${l.key}">${open ? 'Hide' : 'All'} matchups (${others.length})</a>` : ''}
-      ${open ? `<div class="others">${others.map(g => matchupHtml(g, false)).join('')}</div>` : ''}
+      ${open ? `<div class="others">${others.map(g => matchupHtml(g, false, l.key, l.games.indexOf(g))).join('')}</div>` : ''}
     </div>`;
   }).join('') || '<div class="muted">No leagues found.</div>';
   document.querySelectorAll('.espnPick').forEach(sel => sel.onchange = async e => {
@@ -537,6 +636,118 @@ function renderLeagues(){
     store.set(espnTeamKey(e.target.dataset.league), e.target.value);
     await loadLeagues(); render();
   });
+}
+
+/* ---------- matchup detail view ---------- */
+function statLine(p, nameIdx){
+  const id = (p.espnId && state.stats[p.espnId]) ? p.espnId : nameIdx[p.norm];
+  const st = id && state.stats[id];
+  if(!st) return '';
+  const out = [];
+  const add = (v, label) => { if(v != null && v !== '' && v !== '0' && v !== '0/0') out.push(`<b>${esc(v)}</b> ${label}`); };
+  if(st.passing){ add(st.passing['C/ATT'], 'C/Att'); add(st.passing.YDS, 'PaYd'); add(st.passing.TD, 'PaTD'); add(st.passing.INT, 'Int'); }
+  if(st.rushing){ add(st.rushing.YDS, 'RuYd'); add(st.rushing.TD, 'RuTD'); }
+  if(st.receiving){ add(st.receiving.TGTS, 'Tgt'); add(st.receiving.REC, 'Rec'); add(st.receiving.YDS, 'RecYd'); add(st.receiving.TD, 'RecTD'); }
+  if(st.kicking){ add(st.kicking.FG, 'FG'); add(st.kicking.XP, 'XP'); }
+  return out.join(' ');
+}
+
+function gameNote(p){
+  const g = gameForTeam(p.team);
+  if(!g) return 'Bye';
+  const home = g.home.abbr === p.team;
+  const opp = home ? g.away.abbr : g.home.abbr;
+  if(g.state === 'pre'){
+    const d = new Date(g.date);
+    return `🕒 ${d.toLocaleDateString([], {weekday:'short'})} ${d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}).replace(' ', '').toLowerCase()} ${home ? 'vs' : '@'} ${opp}`;
+  }
+  if(g.state === 'in') return `<span class="livec">${esc(g.detail)}</span>`;
+  return '';
+}
+
+function playerBlock(p, side, nameIdx){
+  if(!p) return `<div class="pl ${side}"></div><div class="pp ${side}"></div>`;
+  if(p.empty) return `<div class="pl ${side}"><div class="muted">Empty</div></div><div class="pp ${side}"><b>-</b></div>`;
+  const g = gameForTeam(p.team);
+  const notStarted = !g || g.state === 'pre';
+  const stats = statLine(p, nameIdx);
+  const note = gameNote(p);
+  return `<div class="pl ${side}">
+      <img src="${p.img}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+      <div class="pt"><div class="pn">${esc(p.short)}</div><div class="ps">${stats}${stats && note ? '<br>' : ''}${note}</div></div>
+    </div>
+    <div class="pp ${side}"><b>${notStarted && !p.pts ? '-' : Number(p.pts).toFixed(2)}</b><small>${p.proj ? p.proj.toFixed(1) : '-'}</small></div>`;
+}
+
+const slotClass = s => ({QB:'qb', RB:'rb', WR:'wr', TE:'te', K:'k', DEF:'k', BN:'bn'})[s] || 'fx';
+
+function pairsHtml(left, right, nameIdx){
+  let html = '', prev = null;
+  const n = Math.max(left.length, right.length);
+  for(let i = 0; i < n; i++){
+    const a = left[i], b = right[i];
+    const slot = (a || b).slot;
+    if(slot !== prev){ if(prev !== null) html += '</div>'; html += '<div class="slotcard">'; prev = slot; }
+    html += `<div class="pr">${playerBlock(a, 'L', nameIdx)}<div class="sb ${slotClass(slot)}">${esc(slot)}</div>${playerBlockRight(b, nameIdx)}</div>`;
+  }
+  return html + (prev !== null ? '</div>' : '');
+}
+// Right side shows points first, then the player (mirror image of the left)
+function playerBlockRight(p, nameIdx){
+  const html = playerBlock(p, 'R', nameIdx);
+  const cut = html.lastIndexOf('<div class="pp R">');
+  return html.slice(cut) + html.slice(0, cut);
+}
+
+function cmpRow(label, a, b, fmt){
+  const max = Math.max(Math.abs(a), Math.abs(b), 0.0001);
+  const cls = a >= b ? 'up' : 'down';
+  return `<div class="cmp">
+    <div class="cb L"><i class="${cls}" style="width:${Math.max(0, a) / max * 100}%"></i></div>
+    <b class="cv L ${cls}">${fmt(a)}</b><span class="cl">${label}</span><b class="cv R">${fmt(b)}</b>
+    <div class="cb R"><i style="width:${Math.max(0, b) / max * 100}%"></i></div>
+  </div>`;
+}
+
+function renderDetail(){
+  const det = $('detail');
+  const lg = state.openMu && state.leagues.find(l => l.key === state.openMu.key);
+  const g = lg && lg.games?.[state.openMu.idx];
+  if(!g){ state.openMu = null; placeDetail(); return; }
+  const nameIdx = {};
+  for(const [id, a] of Object.entries(state.athletes)) nameIdx[normName(a.name)] = id;
+  const {a, b} = g;
+  const head = t => `<div class="tn2">${esc(t.name)}</div><div class="muted">${t.place ? ordinal(t.place) + ' Place - ' : ''}${t.record}</div>`;
+  det.innerHTML = `
+    <div class="mdtop"><button id="mdBack">‹ Back</button><span>${esc(lg.name)} <small class="muted">${lg.platform}</small></span></div>
+    <div class="mdhead">
+      <div class="th L">${head(a)}</div><div class="muted vs">vs.</div><div class="th R">${head(b)}</div>
+    </div>
+    <div class="cmps">
+      ${cmpRow('Live Pts', a.pts, b.pts, v => v.toFixed(2))}
+      ${cmpRow('Win %', a.win * 100, b.win * 100, v => v.toFixed(1) + '%')}
+      ${cmpRow('Proj Pts', a.pts + a.rem, b.pts + b.rem, v => v.toFixed(2))}
+      ${cmpRow('Time Left', a.mins, b.mins, v => Math.round(v) + 'm')}
+    </div>
+    ${pairsHtml(a.lineup || [], b.lineup || [], nameIdx)}
+    <div class="benchhead">BENCH</div>
+    ${pairsHtml(a.bench || [], b.bench || [], nameIdx)}`;
+  $('mdBack').onclick = () => { state.openMu = null; placeDetail(); renderLeagues(); };
+}
+
+// Wide screens: third column. Narrower: replaces the leagues panel.
+function placeDetail(){
+  const det = $('detail'), main = document.querySelector('main');
+  const open = !!state.openMu;
+  const wide = window.matchMedia('(min-width: 1400px)').matches;
+  det.style.display = open ? '' : 'none';
+  main.classList.toggle('three', open && wide);
+  if(open && wide){ if(det.parentNode !== $('col3')) $('col3').appendChild(det); }
+  else if(det.parentNode !== $('side')) $('side').prepend(det);
+  const hide = open && !wide;
+  $('lbox').style.display = hide ? 'none' : '';
+  $('gbox').style.display = hide ? 'none' : '';
+  $('mdBack') && ($('mdBack').textContent = wide ? '✕ Close' : '‹ Back');
 }
 
 /* ---------- fantasy scoring ---------- */
@@ -659,6 +870,7 @@ function render(){
   state.firstRender = false;
   renderGames();
   if(state.leaguesAt) renderLeagues();
+  if(state.openMu) renderDetail();
 }
 
 function renderGames(){
@@ -728,6 +940,14 @@ function bind(){
   $('fMine').classList.toggle('on', s.mine);
   $('fMine').onclick = () => { s.mine = !s.mine; $('fMine').classList.toggle('on', s.mine); save(); };
   $('leagues').onclick = e => {
+    const m = e.target.closest('[data-mu]');
+    if(m){
+      const [key, idx] = m.dataset.mu.split('|');
+      state.openMu = {key, idx: +idx};
+      placeDetail(); renderDetail(); renderLeagues();
+      if(!window.matchMedia('(min-width: 1400px)').matches) $('side').scrollIntoView({behavior:'smooth'});
+      return;
+    }
     const a = e.target.closest('[data-expand]'); if(!a) return;
     const k = a.dataset.expand;
     state.expanded.has(k) ? state.expanded.delete(k) : state.expanded.add(k);
@@ -741,6 +961,7 @@ function bind(){
 }
 
 bind();
+window.addEventListener('resize', () => { if(state.openMu){ placeDetail(); } });
 refresh();
 setInterval(refresh, POLL_MS);
 </script>
