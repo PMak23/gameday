@@ -66,10 +66,11 @@ aside h2{font-size:14px;margin:0 0 10px;font-weight:600}
 .lg select{width:100%;margin-top:6px}
 .lg h3{margin:0 0 8px;font-size:14px;font-weight:600;display:flex;justify-content:space-between}
 .lg h3 small{color:var(--muted);font-weight:500;font-size:11px}
-.lhead,.mrow{display:grid;grid-template-columns:minmax(0,1fr) 54px 48px 44px;gap:6px;align-items:center}
+.lhead,.mrow{display:grid;grid-template-columns:minmax(0,1fr) 50px 44px 46px 34px;gap:5px;align-items:center}
 .lhead{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px}
-.lhead span:nth-child(2){text-align:right}
-.lhead span:nth-child(3){grid-column:3/5;text-align:center}
+.lhead span:nth-child(2),.lhead span:nth-child(3){text-align:right}
+.lhead span:nth-child(4){grid-column:4/6;text-align:center}
+.mrow .pj{text-align:right;font-size:12px;color:var(--muted)}
 .lhead .ln{color:var(--text);font-size:14px}
 .lhead .ln small{color:var(--muted);font-size:10px;font-weight:500;margin-left:4px}
 .mrow{padding:3px 0;font-size:13px}
@@ -580,6 +581,7 @@ function matchupHtml(g, big, key, idx){
     return `<div class="mrow${bold ? ' mine' : ''}" title="Projected final: ${(t.pts + t.rem).toFixed(1)}">
       <span class="nm" title="${esc(t.name)}"><span class="tn">${esc(t.name)}</span><span class="rc">(${t.record})</span></span>
       <b class="lp ${t.pts > o.pts ? 'lead' : ''}">${Number(t.pts).toFixed(2)}</b>
+      <span class="pj">${(t.pts + t.rem).toFixed(1)}</span>
       <span class="wp ${cls}">${pct.toFixed(1)}%</span>
       <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
     </div>`;
@@ -594,6 +596,7 @@ function koRow(t, danger){
   return `<div class="mrow${t.mine ? ' mine' : ''}${danger ? ' danger' : ''}" title="Projected final: ${(t.pts + t.rem).toFixed(1)}">
     <span class="nm" title="${esc(t.name)}"><span class="tn">${esc(t.name)}</span><span class="rc">(${t.record})</span></span>
     <b class="lp">${Number(t.pts).toFixed(2)}</b>
+    <span class="pj">${(t.pts + t.rem).toFixed(1)}</span>
     <span class="wp ${cls}">${pct.toFixed(1)}%</span>
     <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
   </div>`;
@@ -606,7 +609,7 @@ function koHtml(l){
   // Collapsed: your team plus the bottom 3
   const shown = open ? list : list.filter((t, i) => t.mine || i >= last - 2);
   return `<div class="lg">
-    <div class="lhead"><span class="ln">${esc(l.name)} <small>ESPN · Knockout · ${list.length} alive</small></span><span>Live Pts</span><span>Survive %</span></div>
+    <div class="lhead"><span class="ln">${esc(l.name)} <small>ESPN · Knockout · ${list.length} alive</small></span><span>Live</span><span>Proj</span><span>Survive %</span></div>
     ${shown.map(t => koRow(t, list.indexOf(t) === last)).join('')}
     ${list.length > shown.length || open ? `<a class="all" data-expand="${l.key}">${open ? 'Show less' : `All teams (${list.length})`}</a>` : ''}
   </div>`;
@@ -625,7 +628,7 @@ function renderLeagues(){
     const others = (l.games || []).filter(g => !g.mine);
     const open = state.expanded.has(l.key);
     return `<div class="lg">
-      <div class="lhead"><span class="ln">${esc(l.name)} <small>${l.platform}</small></span><span>Live Pts</span><span>Win %</span></div>
+      <div class="lhead"><span class="ln">${esc(l.name)} <small>${l.platform}</small></span><span>Live</span><span>Proj</span><span>Win %</span></div>
       ${mine ? matchupHtml(mine, true, l.key, l.games.indexOf(mine)) : '<div class="muted">No matchup this week.</div>'}
       ${others.length ? `<a class="all" data-expand="${l.key}">${open ? 'Hide' : 'All'} matchups (${others.length})</a>` : ''}
       ${open ? `<div class="others">${others.map(g => matchupHtml(g, false, l.key, l.games.indexOf(g))).join('')}</div>` : ''}
@@ -727,8 +730,8 @@ function renderDetail(){
     </div>
     <div class="cmps">
       ${cmpRow('Live Pts', a.pts, b.pts, v => v.toFixed(2))}
-      ${cmpRow('Win %', a.win * 100, b.win * 100, v => v.toFixed(1) + '%')}
       ${cmpRow('Proj Pts', a.pts + a.rem, b.pts + b.rem, v => v.toFixed(2))}
+      ${cmpRow('Win %', a.win * 100, b.win * 100, v => v.toFixed(1) + '%')}
       ${cmpRow('Time Left', a.mins, b.mins, v => Math.round(v) + 'm')}
     </div>
     ${pairsHtml(a.lineup || [], b.lineup || [], nameIdx)}
