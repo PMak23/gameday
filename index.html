@@ -192,7 +192,7 @@ const CONFIG = {
 };
 const SB = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
 const SUMMARY = id => `https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${id}`;
-const PLAYS = (id, page) => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${id}/competitions/${id}/plays?limit=400&page=${page}`;
+const PLAYS = (id, page) => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/${id}/competitions/${id}/plays?limit=300&page=${page}`;
 const ATHLETE = id => `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/athletes/${id}`;
 const HEADSHOT = id => `https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${id}.png&w=96&h=96&scale=crop`;
 const POS = {1:'WR',7:'TE',8:'QB',9:'RB',10:'FB',22:'K'};
@@ -214,6 +214,8 @@ const state = {
   shown: PAGE,
   leagues: [],        // {key, name, platform, me, opp, myIds:Set, oppIds:Set, error, teams}
   leaguesAt: 0,
+  playMeta: {},       // gameId -> {pages, byId, fullAt}
+  playErr: {},        // gameId -> last error message
   stats: {},          // espn athlete id -> {passing:{...}, rushing:{...}, receiving:{...}, kicking:{...}}
   openMu: null,       // {key, idx} of the matchup shown in the detail view
   expanded: new Set(),
@@ -263,15 +265,23 @@ async function loadSummary(id){
   state.summaryAt[id] = Date.now();
 }
 
+// Incremental: after the first full load, only re-fetch from the last known page forward.
+// A full re-sync runs every 10 minutes to pick up ESPN's corrections to older plays.
 async function loadPlays(id){
-  let page = 1, items = [];
+  const meta = state.playMeta[id] = state.playMeta[id] || {pages: 0, byId: new Map(), fullAt: 0};
+  const full = !meta.pages || Date.now() - meta.fullAt > 600000;
+  let page = full ? 1 : meta.pages;
+  const byId = full ? new Map() : meta.byId;
   while(true){
     const d = await getJSON(PLAYS(id, page));
-    items = items.concat(d.items || []);
-    if(page >= (d.pageCount || 1)) break;
+    for(const p of d.items || []) byId.set(p.id, p);
+    const last = d.pageCount || 1;
+    if(page >= last){ meta.pages = last; break; }
     page++;
   }
-  state.plays[id] = items;
+  meta.byId = byId;
+  if(full) meta.fullAt = Date.now();
+  state.plays[id] = [...byId.values()];
 }
 
 async function fillMissingAthletes(ids){
@@ -906,22 +916,40 @@ function renderGames(){
 async function refresh(){
   try{
     await loadScoreboard();
-    if(Date.now() - state.leaguesAt > 60000) await loadLeagues();
-    const active = Object.values(state.games).filter(g => g.state === 'in' || (g.state === 'post' && !g.done));
-    await Promise.all(active.map(async g => {
+    if(Date.now() - state.leaguesAt > 60000){
+      try{ await loadLeagues(); }catch(e){ console.warn('leagues', e); state.leaguesAt = Date.now() - 30000; }
+    }
+    const now = Date.now();
+    const loadGame = async g => {
       try{
-        if(!state.summaryAt[g.id] || Date.now() - state.summaryAt[g.id] > 120000) await loadSummary(g.id);
+        if(!state.summaryAt[g.id] || (g.state === 'in' && now - state.summaryAt[g.id] > 120000)) await loadSummary(g.id);
         await loadPlays(g.id);
+        delete state.playErr[g.id];
         if(g.state === 'post') g.done = true;
-      }catch(e){ console.warn(e); }
-    }));
+      }catch(e){
+        console.warn('plays', g.id, e);
+        state.playErr[g.id] = e.message;
+        g.retryAt = Date.now() + 60000;
+      }
+    };
+    // Live games first, every refresh
+    const live = Object.values(state.games).filter(g => g.state === 'in' && !(g.retryAt > now));
+    await Promise.all(live.map(loadGame));
+    // Finished games: load once each, two at a time, so we don't flood ESPN
+    const finished = Object.values(state.games).filter(g => g.state === 'post' && !g.done && !(g.retryAt > now)).slice(0, 2);
+    for(const g of finished) await loadGame(g);
     const ids = new Set();
     Object.values(state.plays).forEach(items => items.forEach(p => scorePlay(p, state.settings).forEach(r => ids.add(r.id))));
     await fillMissingAthletes(ids);
     store.set('gd.ath', state.athletes);
     render();
-    const live = Object.values(state.games).filter(g => g.state === 'in').length;
-    $('status').innerHTML = live ? `<span class="dot"></span>${live} live · updated ${new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}` : `No live games · updated ${new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
+    const liveN = Object.values(state.games).filter(g => g.state === 'in').length;
+    const t = new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
+    const errs = Object.keys(state.playErr).length;
+    const pending = Object.values(state.games).filter(g => g.state === 'post' && !g.done).length;
+    $('status').innerHTML = (liveN ? `<span class="dot"></span>${liveN} live · updated ${t}` : `No live games · updated ${t}`)
+      + (pending ? ` · loading ${pending} finished game${pending > 1 ? 's' : ''}` : '')
+      + (errs ? ` · <span style="color:var(--red)" title="${esc(Object.values(state.playErr).join(' | '))}">plays delayed for ${errs} game${errs > 1 ? 's' : ''}</span>` : '');
     $('err').style.display = 'none';
   }catch(e){
     console.error(e);
