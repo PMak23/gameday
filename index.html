@@ -216,6 +216,9 @@ const state = {
   leaguesAt: 0,
   playMeta: {},       // gameId -> {pages, byId, fullAt}
   playErr: {},        // gameId -> last error message
+  rosters: {},        // gameId -> [{id, first, last, teamId}]
+  posGuess: {},       // espn id -> stat categories seen
+  posByEspn: null,
   stats: {},          // espn athlete id -> {passing:{...}, rushing:{...}, receiving:{...}, kicking:{...}}
   openMu: null,       // {key, idx} of the matchup shown in the detail view
   expanded: new Set(),
@@ -252,17 +255,178 @@ async function loadScoreboard(){
 
 async function loadSummary(id){
   const d = await getJSON(SUMMARY(id));
+  const roster = [];
   for(const tp of d.boxscore?.players || []){
     for(const cat of tp.statistics || []){
       for(const a of cat.athletes || []){
         state.athletes[a.athlete.id] = {name:a.athlete.displayName, team:tp.team.abbreviation};
+        if(!roster.some(r => r.id === a.athlete.id)) roster.push({id:a.athlete.id, first:a.athlete.firstName || a.athlete.displayName.split(' ')[0], last:a.athlete.lastName || a.athlete.displayName.split(' ').slice(1).join(' '), teamId:String(tp.team.id)});
+        const g = state.posGuess[a.athlete.id] = state.posGuess[a.athlete.id] || {};
+        g[cat.name] = true;
         const row = {};
         (cat.labels || []).forEach((lb, i) => row[lb] = a.stats?.[i]);
         (state.stats[a.athlete.id] = state.stats[a.athlete.id] || {})[cat.name] = row;
       }
     }
   }
+  state.rosters[id] = roster;
+  // Every play of the game, from the same feed as the scores
+  const dr = d.drives || {};
+  const plays = [];
+  for(const drv of [...(dr.previous || []), ...(dr.current ? [dr.current] : [])]) for(const p of drv.plays || []) plays.push(p);
+  const byId = new Map();
+  for(const p of plays){ p._parts = parsePlayers(p, roster); byId.set(p.id, p); }
+  state.plays[id] = [...byId.values()];
   state.summaryAt[id] = Date.now();
+}
+
+/* ---------- reading player names out of play text ---------- */
+const NAME_RE = "[A-Z][A-Za-z]{0,2}\\.\\s?[A-Z][A-Za-z'\\-]+(?:\\.?\\s[A-Z][a-z][A-Za-z'\\-]+)?";
+const normLast = n => String(n || '').toLowerCase().replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g, '').replace(/[^a-z]/g, '');
+function findPlayer(abbr, roster, teamId){
+  if(!abbr) return null;
+  abbr = abbr.trim();
+  const i = abbr.indexOf('.');
+  if(i < 0 || i > 3){
+    // Full name, e.g. "Tommy Tremble"
+    const full = normLast(abbr);
+    const hit = roster.filter(r => normLast(r.first + r.last) === full);
+    return (hit.find(r => r.teamId === teamId) || hit[0])?.id || null;
+  }
+  const pre = abbr.slice(0, i).toLowerCase(), last = normLast(abbr.slice(i + 1));
+  const sameLast = roster.filter(r => normLast(r.last) === last);
+  const hits = sameLast.filter(r => r.first.toLowerCase().startsWith(pre));
+  const pick = hits.find(r => r.teamId === teamId) || hits[0];
+  if(pick) return pick.id;
+  // ESPN sometimes uses a legal first name (Z.Knight = Bam Knight): fall back to the only player with that last name on the team
+  const onTeam = sameLast.filter(r => r.teamId === teamId);
+  return onTeam.length === 1 ? onTeam[0].id : null;
+}
+function posOf(id){
+  if(!state.posByEspn){
+    state.posByEspn = {};
+    const m = store.get('gd.slmap3', null)?.map || {};
+    state.posByName = {};
+    for(const v of Object.values(m)){
+      const pos = v[3] === 'FB' ? 'RB' : v[3];
+      if(v[0]) state.posByEspn[v[0]] = pos;
+      if(v[1] && pos !== 'DEF') state.posByName[v[1]] = pos;
+    }
+  }
+  const p = state.posByEspn[id] || state.posByName[normName(state.athletes[id]?.name)];
+  if(p) return p;
+  const g = state.posGuess[id] || {}, st = state.stats[id] || {};
+  const n = v => parseFloat(String(v || '0').split('/').pop()) || 0;
+  if(g.kicking) return 'K';
+  if(g.passing && n(st.passing?.['C/ATT']) >= 3) return 'QB';
+  if(g.rushing && n(st.rushing?.CAR) >= n(st.receiving?.REC)) return 'RB';
+  return g.receiving ? 'WR' : g.rushing ? 'RB' : g.passing ? 'QB' : null;
+}
+// Reads who did what from ESPN's play text, plus the yards gained on the play itself
+// (ESPN's yardage field can include penalty yards, so the text is more accurate).
+function parsePlayers(p, roster){
+  const t = p.type?.text || '';
+  const clean = x => x.replace(/^(?:\s*(?:.*?reported in as eligible\.|\([^)]*\)|Direct snap to [^.]*\.[^.]*\.))+\s*/, '').trim();
+  let txt = clean(p.text || '');
+  // Replay reversal: only the ruling after "REVERSED." counts
+  const rv = txt.split(/REVERSED\.\s*/);
+  if(rv.length > 1) txt = clean(rv[rv.length - 1]);
+  const team = String(p.start?.team?.id || p.team?.id || '');
+  const N = NAME_RE, parts = [];
+  const push = (abbr, type) => { const id = findPlayer(abbr, roster, team); if(id) parts.push({id, type}); };
+  const ydsIn = seg => { const m = seg.match(/for (-?\d+) yards?|for (no gain)/); return m ? (m[2] ? 0 : +m[1]) : null; };
+  p._kind = null; p._yds = 0; p._td = false;
+
+  // Short summary format: "Tommy Tremble 19 Yd pass from Bryce Young (...)", "Bijan Robinson 5 Yd Run (...)"
+  const sp = txt.match(/^(.+?) (\d+) Yd pass from (.+?) \(/);
+  const sr = txt.match(/^(.+?) (\d+) Yd Run/);
+  if(sp || sr){
+    if(sp){ push(sp[3], 'passer'); push(sp[1], 'receiver'); p._kind = 'pass'; p._yds = +sp[2]; }
+    else { push(sr[1], 'rusher'); p._kind = 'rush'; p._yds = +sr[2]; }
+    p._td = true;
+    const pat = txt.match(/\((.+?) Kick\)/);
+    if(pat) push(pat[1], 'patScorer');
+    return parts;
+  }
+
+  if(/No Play/i.test(txt)) return parts;                     // wiped out by a penalty
+  const main = txt.split(/TWO-POINT CONVERSION ATTEMPT/i)[0];
+  const action = main.split(/PENALTY/)[0];
+  const passer = action.match(new RegExp('(' + N + ') pass\\b'));
+  const scramble = new RegExp('^(' + N + ') (?:up the middle|left|right|scrambles|kneels|to |pushed|ran|for )');
+  if(passer){
+    push(passer[1], 'passer');
+    if(/INTERCEPTED/.test(action)) p._kind = 'int';
+    else if(!/incomplete/.test(action)){
+      const rec = action.match(new RegExp('pass[^.]*?\\bto (' + N + ')(.*)'));
+      if(rec){
+        push(rec[1], 'receiver');
+        p._kind = 'pass';
+        const y = ydsIn(rec[2]); p._yds = y == null ? (p.statYardage || 0) : y;
+      }
+    }
+  } else if(/sacked/.test(action)){
+    const s = action.match(new RegExp('^(' + N + ') sacked'));
+    if(s) push(s[1], 'passer');
+  } else {
+    const r = action.match(scramble);
+    if(r){
+      push(r[1], 'rusher');
+      p._kind = 'rush';
+      const y = ydsIn(action); p._yds = y == null ? (p.statYardage || 0) : y;
+    }
+  }
+  p._td = (p._kind === 'pass' || p._kind === 'rush') && /TOUCHDOWN/.test(action) && !/TOUCHDOWN NULLIFIED/.test(txt);
+
+  if(/Field Goal Good/.test(t) || /field goal is GOOD/.test(txt)){
+    const k = txt.match(new RegExp('(' + N + ') (\\d+) yard field goal is GOOD'));
+    if(k){ push(k[1], 'kicker'); p._fg = +k[2]; }
+  }
+  const xp = txt.match(new RegExp('(' + N + ') extra point is GOOD'));
+  if(xp) push(xp[1], 'patScorer');
+  if(p.isTurnover && /FUMBLES/.test(txt) && p._kind !== 'int'){
+    const carrier = parts.find(x => x.type === 'receiver') || parts.find(x => x.type === 'rusher') || parts.find(x => x.type === 'passer');
+    if(carrier) parts.push({...carrier, type: 'fumbler'});
+  }
+  const two = txt.match(/TWO-POINT CONVERSION ATTEMPT\.\s*(.*?)ATTEMPT SUCCEEDS/i);
+  if(two){
+    const seg = two[1].replace(/^(?:\s*\([^)]*\))+\s*/, '');
+    const pp = seg.match(new RegExp('(' + N + ') pass'));
+    if(pp){
+      push(pp[1], 'twoPt');
+      const r2 = seg.match(new RegExp('\\bto (' + N + ')'));
+      if(r2) push(r2[1], 'twoPt');
+    } else {
+      const f2 = (seg.match(new RegExp('^(' + N + ')')) || [])[1];
+      push(f2, 'twoPt');
+    }
+  }
+  return parts;
+}
+
+// Fantasy points for a play read from text (same scoring rules as before)
+function scoreParsed(p, s){
+  const rows = {};
+  const add = (x, pts) => {
+    if(!x || !pts) return;
+    const pos = posOf(x.id); if(!pos) return;
+    rows[x.id] = rows[x.id] || {id:x.id, pos, delta:0};
+    rows[x.id].delta += pts;
+  };
+  const parts = p._parts || [];
+  const one = type => parts.find(x => x.type === type);
+  const yd = p._yds || 0;
+  if(p._kind === 'rush') add(one('rusher'), yd * 0.1 + (p._td ? 6 : 0));
+  if(p._kind === 'pass'){
+    add(one('passer'), yd * 0.04 + (p._td ? s.passTd : 0));
+    add(one('receiver'), s.rec + yd * 0.1 + (p._td ? 6 : 0));
+  }
+  if(p._kind === 'int') add(one('passer'), -2);
+  if(p._fg) add(one('kicker'), p._fg >= 50 ? 5 : p._fg >= 40 ? 4 : 3);
+  add(one('patScorer'), 1);
+  parts.filter(x => x.type === 'twoPt').forEach(x => add(x, 2));
+  add(one('fumbler'), -2);
+  return Object.values(rows).map(r => ({...r, delta: Math.round(r.delta * 100) / 100}));
 }
 
 // Incremental: after the first full load, only re-fetch from the last known page forward.
@@ -312,6 +476,7 @@ async function sleeperIdMap(){
     map[sid] = [p.espn_id ? String(p.espn_id) : '', p.position === 'DEF' ? '' : normName(name), name, p.position, teamKey(p.team || (p.position === 'DEF' ? sid : ''))];
   }
   store.set('gd.slmap3', {at: Date.now(), map});
+  state.posByEspn = null;
   return map;
 }
 
@@ -767,11 +932,12 @@ function placeDetail(){
 
 /* ---------- fantasy scoring ---------- */
 function scorePlay(p, s){
+  if(p._parts) return scoreParsed(p, s);
   const t = p.type?.text || '';
   const txt = p.text || '';
   if(t === 'Penalty' || (p.isPenalty && /no play/i.test(txt))) return [];
-  const seen = new Set(), parts = [];
-  for(const x of p.participants || []){
+  const seen = new Set(), parts = p._parts ? p._parts.map(x => ({...x, pos: posOf(x.id)})) : [];
+  for(const x of p._parts ? [] : p.participants || []){
     const id = idFrom(x.athlete?.$ref, 'athletes');
     const key = id + x.type;
     if(!id || seen.has(key)) continue;
@@ -801,7 +967,8 @@ function scorePlay(p, s){
     const dist = m ? +m[1] : yd;
     add(one('kicker') || one('fieldGoalKicker'), dist >= 50 ? 5 : dist >= 40 ? 4 : 3);
   }
-  if(p.pointAfterAttempt?.value === 1 && /extra point is good/i.test(txt)) add(one('patScorer'), 1);
+  if(/extra point is good/i.test(txt)) add(one('patScorer'), 1);
+  parts.filter(x => x.type === 'twoPt').forEach(x => add(x, 2));
   if(/(Kickoff|Punt) Return Touchdown/.test(t)) add(one('returner'), 6);
   if(p.isTurnover && !/Interception/.test(t)){
     const f = parts.find(x => /fumbl/i.test(x.type));
@@ -922,8 +1089,7 @@ async function refresh(){
     const now = Date.now();
     const loadGame = async g => {
       try{
-        if(!state.summaryAt[g.id] || (g.state === 'in' && now - state.summaryAt[g.id] > 120000)) await loadSummary(g.id);
-        await loadPlays(g.id);
+        await loadSummary(g.id);
         delete state.playErr[g.id];
         if(g.state === 'post') g.done = true;
       }catch(e){
@@ -936,7 +1102,7 @@ async function refresh(){
     const live = Object.values(state.games).filter(g => g.state === 'in' && !(g.retryAt > now));
     await Promise.all(live.map(loadGame));
     // Finished games: load once each, two at a time, so we don't flood ESPN
-    const finished = Object.values(state.games).filter(g => g.state === 'post' && !g.done && !(g.retryAt > now)).slice(0, 2);
+    const finished = Object.values(state.games).filter(g => g.state === 'post' && !g.done && !(g.retryAt > now)).slice(0, 4);
     for(const g of finished) await loadGame(g);
     const ids = new Set();
     Object.values(state.plays).forEach(items => items.forEach(p => scorePlay(p, state.settings).forEach(r => ids.add(r.id))));
