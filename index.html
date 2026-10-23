@@ -136,6 +136,25 @@ main.three .col3{display:block}
 .sb.fx{background:#5b6068}.sb.k{background:#4a5565}.sb.bn{background:#33373d;color:var(--muted)}
 .benchhead{text-align:center;font-size:12px;font-weight:700;letter-spacing:2px;color:var(--muted);margin:18px 0 10px;display:flex;align-items:center;gap:10px}
 .benchhead::before,.benchhead::after{content:"";flex:1;border-top:2px dashed var(--line)}
+.gtscore{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;background:#0f2742;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:18px;font-weight:700}
+.gtscore .R{text-align:right}
+.gt-c{font-size:12px;font-weight:600;background:#2a2e33;border-radius:6px;padding:3px 8px;color:var(--text)}
+.gt-c.live{color:var(--green)}
+.gthead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:4px 12px;font-size:12px;background:transparent}
+.seg button.on{background:#0f2742;color:#fff}
+.bx{border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:10px}
+.bx table{width:100%;border-collapse:collapse;font-size:12px}
+.bx th{background:#0f2742;color:#fff;font-weight:700;text-align:center;padding:7px 6px}
+.bx th:first-child{text-align:left}
+.bx td{padding:7px 6px;text-align:center;border-top:1px solid #2a2e33}
+.bx td.nmc{text-align:left;white-space:nowrap;font-weight:500}
+.bx td.nmc .tag{margin-left:4px}
+.bx td.fp{font-weight:700}
+.bx tfoot td{font-weight:600;color:var(--muted)}
+.bx tfoot td:first-child{text-align:left}
+.game.sel{outline:1px solid var(--accent)}
 .err{background:#3a1f1f;border:1px solid #6b2d2d;color:#f2b8b5;padding:10px 14px;border-radius:8px;margin-bottom:14px;display:none}
 </style>
 </head>
@@ -217,6 +236,9 @@ const state = {
   playMeta: {},       // gameId -> {pages, byId, fullAt}
   playErr: {},        // gameId -> last error message
   rosters: {},        // gameId -> [{id, first, last, teamId}]
+  box: {},            // gameId -> ESPN box score
+  openGame: null,     // game id shown in the tracker
+  gameSide: {},       // gameId -> team abbr shown in the tracker
   posGuess: {},       // espn id -> stat categories seen
   posByEspn: null,
   stats: {},          // espn athlete id -> {passing:{...}, rushing:{...}, receiving:{...}, kicking:{...}}
@@ -270,6 +292,7 @@ async function loadSummary(id){
     }
   }
   state.rosters[id] = roster;
+  state.box[id] = d.boxscore;
   // Every play of the game, from the same feed as the scores
   const dr = d.drives || {};
   const plays = [];
@@ -918,7 +941,7 @@ function renderDetail(){
 // Wide screens: third column. Narrower: replaces the leagues panel.
 function placeDetail(){
   const det = $('detail'), main = document.querySelector('main');
-  const open = !!state.openMu;
+  const open = !!(state.openMu || state.openGame);
   const wide = window.matchMedia('(min-width: 1400px)').matches;
   det.style.display = open ? '' : 'none';
   main.classList.toggle('three', open && wide);
@@ -928,6 +951,131 @@ function placeDetail(){
   $('lbox').style.display = hide ? 'none' : '';
   $('gbox').style.display = hide ? 'none' : '';
   $('mdBack') && ($('mdBack').textContent = wide ? '✕ Close' : '‹ Back');
+}
+
+/* ---------- game tracker (box score with fantasy points) ---------- */
+const numv = v => parseFloat(String(v ?? '0').split('/')[0]) || 0;
+const tot = (cat, label) => { const i = (cat?.labels || []).indexOf(label); return i < 0 ? 0 : numv(cat.totals?.[i]); };
+
+// Extra fantasy points that only the play-by-play knows about (2-pt conversions, FG distance)
+function playExtras(gameId){
+  const ex = {};
+  for(const p of state.plays[gameId] || []){
+    for(const x of p._parts || []){
+      const e = ex[x.id] = ex[x.id] || {two: 0, fg: 0};
+      if(x.type === 'twoPt') e.two += 2;
+      if(x.type === 'kicker' && p._fg) e.fg += p._fg >= 50 ? 5 : p._fg >= 40 ? 4 : 3;
+    }
+  }
+  return ex;
+}
+
+function playerFpts(st, ex, s){
+  let pts = 0;
+  if(st.passing) pts += numv(st.passing.YDS) * 0.04 + numv(st.passing.TD) * s.passTd - numv(st.passing.INT) * 2;
+  if(st.rushing) pts += numv(st.rushing.YDS) * 0.1 + numv(st.rushing.TD) * 6;
+  if(st.receiving) pts += numv(st.receiving.REC) * s.rec + numv(st.receiving.YDS) * 0.1 + numv(st.receiving.TD) * 6;
+  if(st.fumbles) pts -= numv(st.fumbles.LOST) * 2;
+  if(st.kicking) pts += (ex?.fg || 0) + numv(st.kicking.XP);
+  pts += ex?.two || 0;
+  return pts;
+}
+
+function dstPoints(pa){
+  return pa === 0 ? 10 : pa <= 6 ? 7 : pa <= 13 ? 4 : pa <= 20 ? 1 : pa <= 27 ? 0 : pa <= 34 ? -1 : -4;
+}
+
+function renderGameView(){
+  const det = $('detail'), id = state.openGame;
+  const g = state.games[id];
+  if(!g){ state.openGame = null; placeDetail(); return; }
+  const box = state.box[id];
+  const side = state.gameSide[id] || g.away.abbr;
+  const top = `<div class="mdtop"><button id="mdBack">‹ Back</button><span>Game Tracker</span></div>
+    <div class="gtscore">
+      <span class="gt-t">${g.away.abbr} <b>${g.state === 'pre' ? '' : g.away.score}</b></span>
+      <span class="gt-c${g.state === 'in' ? ' live' : ''}">${esc(g.detail)}</span>
+      <span class="gt-t R"><b>${g.state === 'pre' ? '' : g.home.score}</b> ${g.home.abbr}</span>
+    </div>`;
+  if(g.state === 'pre' || !box){
+    det.innerHTML = top + `<div class="empty">${g.state === 'pre' ? 'Player stats show up once the game kicks off.' : 'Loading stats…'}</div>`;
+    $('mdBack').onclick = closeGame;
+    return;
+  }
+  const s = state.settings, ex = playExtras(id);
+  const tp = (box.players || []).find(x => x.team.abbreviation === side) || box.players?.[0];
+  const opp = (box.players || []).find(x => x !== tp);
+  const teamStats = t => Object.fromEntries((box.teams || []).find(x => x.team.abbreviation === t)?.statistics?.map(x => [x.name, x.displayValue]) || []);
+  const cat = name => (tp?.statistics || []).find(c => c.name === name);
+  const fpts = aid => playerFpts(state.stats[aid] || {}, ex[aid], s);
+  const f1 = v => (Math.round(v * 10) / 10).toFixed(1);
+  const fumLost = aid => numv(state.stats[aid]?.fumbles?.LOST);
+
+  const table = (title, cols, rows, totals) => `
+    <div class="bx"><table>
+      <thead><tr><th>${title}</th>${cols.map(c => `<th>${c}</th>`).join('')}<th>FPTS</th></tr></thead>
+      <tbody>${rows.join('') || `<tr><td class="muted" colspan="${cols.length + 2}">None</td></tr>`}</tbody>
+      ${totals ? `<tfoot><tr>${totals}</tr></tfoot>` : ''}
+    </table></div>`;
+  const nameCell = a => `<td class="nmc" title="${esc(a.athlete.displayName)}">${esc(shortName(a.athlete.displayName))}${tagsFor(a.athlete.id)}</td>`;
+  const val = (c, a, label) => esc(a.stats?.[(c.labels || []).indexOf(label)] ?? '0');
+  const totalRow = (c, labels) => `<td>Totals</td>${labels.map(l => `<td>${esc(c?.totals?.[(c.labels || []).indexOf(l)] ?? (l === 'FL' ? '' : '0'))}</td>`).join('')}`;
+
+  let html = '';
+  const pass = cat('passing');
+  html += table('PASSING', ['C/ATT','YDS','AVG','TD','INT','FL'],
+    (pass?.athletes || []).map(a => `<tr>${nameCell(a)}${['C/ATT','YDS','AVG','TD','INT'].map(l => `<td>${val(pass, a, l)}</td>`).join('')}<td>${fumLost(a.athlete.id)}</td><td class="fp">${f1(fpts(a.athlete.id))}</td></tr>`),
+    pass ? totalRow(pass, ['C/ATT','YDS','AVG','TD','INT']) + '<td></td><td></td>' : '');
+  const rush = cat('rushing');
+  html += table('RUSHING', ['ATT','YDS','AVG','TD','FL'],
+    (rush?.athletes || []).map(a => `<tr>${nameCell(a)}${['CAR','YDS','AVG','TD'].map(l => `<td>${val(rush, a, l)}</td>`).join('')}<td>${fumLost(a.athlete.id)}</td><td class="fp">${f1(fpts(a.athlete.id))}</td></tr>`),
+    rush ? totalRow(rush, ['CAR','YDS','AVG','TD']) + '<td></td><td></td>' : '');
+  const rec = cat('receiving');
+  html += table('RECEIVING', ['TGT','REC','YDS','AVG','TD','FL'],
+    (rec?.athletes || []).map(a => `<tr>${nameCell(a)}${['TGTS','REC','YDS','AVG','TD'].map(l => `<td>${val(rec, a, l)}</td>`).join('')}<td>${fumLost(a.athlete.id)}</td><td class="fp">${f1(fpts(a.athlete.id))}</td></tr>`),
+    rec ? totalRow(rec, ['TGTS','REC','YDS','AVG','TD']) + '<td></td><td></td>' : '');
+  const kick = cat('kicking');
+  html += table('KICKING', ['FG','LNG','XP'],
+    (kick?.athletes || []).map(a => `<tr>${nameCell(a)}${['FG','LONG','XP'].map(l => `<td>${val(kick, a, l)}</td>`).join('')}<td class="fp">${f1(fpts(a.athlete.id))}</td></tr>`), '');
+
+  // Team defense
+  const oppAbbr = side === g.away.abbr ? g.home.abbr : g.away.abbr;
+  const pa = numv(side === g.away.abbr ? g.home.score : g.away.score);
+  const sacks = tot(cat('defensive'), 'SACKS');
+  const ints = tot(cat('interceptions'), 'INT');
+  const fr = numv(teamStats(oppAbbr).fumblesLost);
+  const td = numv(teamStats(side).defensiveTouchdowns) + tot(cat('kickReturns'), 'TD') + tot(cat('puntReturns'), 'TD');
+  const dst = dstPoints(pa) + sacks + ints * 2 + fr * 2 + td * 6;
+  html += table('DST', ['PA','SCK','FR','INT','TD'],
+    [`<tr><td class="nmc">${esc(tp?.team?.displayName || side)}</td><td>${pa}</td><td>${sacks}</td><td>${fr}</td><td>${ints}</td><td>${td}</td><td class="fp">${f1(dst)}</td></tr>`], '');
+
+  det.innerHTML = top + `
+    <div class="gthead"><span>Player Stats</span>
+      <span class="seg"><button data-side="${g.away.abbr}" class="${side === g.away.abbr ? 'on' : ''}">${g.away.abbr}</button><button data-side="${g.home.abbr}" class="${side === g.home.abbr ? 'on' : ''}">${g.home.abbr}</button></span>
+    </div>${html}`;
+  $('mdBack').onclick = closeGame;
+  det.querySelectorAll('[data-side]').forEach(b => b.onclick = () => { state.gameSide[id] = b.dataset.side; renderGameView(); });
+}
+
+function closeGame(){
+  state.openGame = null;
+  state.settings.game = 'all';
+  store.set('gd.settings', state.settings);
+  placeDetail(); render();
+}
+
+async function openGame(id){
+  state.openMu = null;
+  state.openGame = id;
+  state.settings.game = id;          // also filter the play feed to this game
+  store.set('gd.settings', state.settings);
+  placeDetail(); render();
+  if(!window.matchMedia('(min-width: 1400px)').matches) $('side').scrollIntoView({behavior:'smooth'});
+  const g = state.games[id];
+  if(g && g.state !== 'pre' && !state.box[id]){
+    try{ await loadSummary(id); if(g.state === 'post') g.done = true; }catch(e){}
+    render();
+  }
 }
 
 /* ---------- fantasy scoring ---------- */
@@ -1052,7 +1200,8 @@ function render(){
   state.firstRender = false;
   renderGames();
   if(state.leaguesAt) renderLeagues();
-  if(state.openMu) renderDetail();
+  if(state.openGame) renderGameView();
+  else if(state.openMu) renderDetail();
 }
 
 function renderGames(){
@@ -1142,6 +1291,7 @@ function bind(){
     const m = e.target.closest('[data-mu]');
     if(m){
       const [key, idx] = m.dataset.mu.split('|');
+      state.openGame = null;
       state.openMu = {key, idx: +idx};
       placeDetail(); renderDetail(); renderLeagues();
       if(!window.matchMedia('(min-width: 1400px)').matches) $('side').scrollIntoView({behavior:'smooth'});
@@ -1155,7 +1305,7 @@ function bind(){
   $('more').onclick = () => { state.shown += PAGE; render(); };
   $('games').onclick = e => {
     const el = e.target.closest('.game'); if(!el) return;
-    s.game = s.game === el.dataset.id ? 'all' : el.dataset.id; save();
+    if(state.openGame === el.dataset.id) closeGame(); else openGame(el.dataset.id);
   };
 }
 
