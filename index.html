@@ -155,6 +155,10 @@ main.three .col3{display:block}
 .bx tfoot td{font-weight:600;color:var(--muted)}
 .bx tfoot td:first-child{text-align:left}
 .game.sel{outline:1px solid var(--accent)}
+.ball{width:18px;height:11px;color:#c98a4b;vertical-align:middle;margin:0 5px}
+.dd2{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap}
+.dd2.rz,.gtdd.rz{color:var(--red)}
+.gtdd{text-align:center;font-size:12px;color:var(--muted);margin:-6px 0 12px;font-weight:600}
 .err{background:#3a1f1f;border:1px solid #6b2d2d;color:#f2b8b5;padding:10px 14px;border-radius:8px;margin-bottom:14px;display:none}
 </style>
 </head>
@@ -270,7 +274,10 @@ async function loadScoreboard(){
       id: ev.id, date: ev.date, away: side('away'), home: side('home'),
       state: ev.status.type.state, detail: ev.status.type.shortDetail,
       period: ev.status.period, clock: ev.status.clock,
-      done: !!state.games[ev.id]?.done
+      done: !!state.games[ev.id]?.done,
+      poss: c.situation?.possession ? String(c.situation.possession) : null,
+      dd: c.situation?.shortDownDistanceText || '', spot: c.situation?.possessionText || '',
+      redZone: !!c.situation?.isRedZone
     };
   }
 }
@@ -993,10 +1000,10 @@ function renderGameView(){
   const side = state.gameSide[id] || g.away.abbr;
   const top = `<div class="mdtop"><button id="mdBack">‹ Back</button><span>Game Tracker</span></div>
     <div class="gtscore">
-      <span class="gt-t">${g.away.abbr} <b>${g.state === 'pre' ? '' : g.away.score}</b></span>
+      <span class="gt-t">${hasBall(g, g.away)}${g.away.abbr} <b>${g.state === 'pre' ? '' : g.away.score}</b></span>
       <span class="gt-c${g.state === 'in' ? ' live' : ''}">${esc(g.detail)}</span>
-      <span class="gt-t R"><b>${g.state === 'pre' ? '' : g.home.score}</b> ${g.home.abbr}</span>
-    </div>`;
+      <span class="gt-t R"><b>${g.state === 'pre' ? '' : g.home.score}</b> ${g.home.abbr}${hasBall(g, g.home)}</span>
+    </div>${g.state === 'in' && g.dd ? `<div class="gtdd${g.redZone ? ' rz' : ''}">${esc(g.dd)} at ${esc(g.spot)}</div>` : ''}`;
   if(g.state === 'pre' || !box){
     det.innerHTML = top + `<div class="empty">${g.state === 'pre' ? 'Player stats show up once the game kicks off.' : 'Loading stats…'}</div>`;
     $('mdBack').onclick = closeGame;
@@ -1204,6 +1211,10 @@ function render(){
   else if(state.openMu) renderDetail();
 }
 
+const BALL = '<svg class="ball" viewBox="0 0 24 14" aria-label="has the ball"><ellipse cx="12" cy="7" rx="11" ry="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 7h8M10 5.5v3M12 5.5v3M14 5.5v3" stroke="currentColor" stroke-width="1.3"/></svg>';
+const hasBall = (g, t) => g.state === 'in' && g.poss && g.poss === String(t.id) ? BALL : '';
+const downText = g => g.state === 'in' && g.dd ? `<div class="dd2${g.redZone ? ' rz' : ''}">${esc(g.dd)} · ${esc(g.spot)}</div>` : '';
+
 function renderGames(){
   const list = Object.values(state.games).sort((a, b) => {
     const rank = g => g.state === 'in' ? 0 : g.state === 'pre' ? 1 : 2;
@@ -1212,12 +1223,12 @@ function renderGames(){
   $('games').innerHTML = list.map(g => `
     <div class="game${state.settings.game === g.id ? ' sel' : ''}" data-id="${g.id}">
       <div class="tm">
-        <div><img src="${g.away.logo}" alt=""> ${g.away.abbr}</div>
-        <div><img src="${g.home.logo}" alt=""> ${g.home.abbr}</div>
+        <div><img src="${g.away.logo}" alt=""> ${g.away.abbr}${hasBall(g, g.away)}</div>
+        <div><img src="${g.home.logo}" alt=""> ${g.home.abbr}${hasBall(g, g.home)}</div>
       </div>
       <div style="display:flex;gap:12px;align-items:center">
         <div class="tm">${g.state === 'pre' ? '' : `<div class="sc">${g.away.score}</div><div class="sc">${g.home.score}</div>`}</div>
-        <div class="st${g.state === 'in' ? ' live' : ''}">${esc(g.detail)}</div>
+        <div class="st${g.state === 'in' ? ' live' : ''}">${esc(g.detail)}${downText(g)}</div>
       </div>
     </div>`).join('') || 'No games this week.';
 
