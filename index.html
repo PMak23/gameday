@@ -523,12 +523,14 @@ async function sleeperIdMap(){
 // Sleeper weekly projections (full PPR), indexed three ways
 let projCache = {at: 0, week: 0, data: null};
 async function loadProjections(week){
-  if(projCache.data && projCache.week === week && Date.now() - projCache.at < 10 * 60000) return projCache.data;
+  if(projCache.data && projCache.week === week && Date.now() - projCache.at < 5 * 60000) return projCache.data;
   const pos = ['QB','RB','WR','TE','K','DEF'].map(p => 'position[]=' + p).join('&');
   const rows = await getJSON(`https://api.sleeper.app/projections/nfl/${CONFIG.season}/${week}?season_type=regular&${pos}`);
   const data = {bySleeper:{}, byName:{}, byDef:{}};
+  const OUT = ['Out', 'IR', 'Sus', 'PUP'];   // ruled out (including mid-game): nothing left to score
   for(const r of rows){
-    const p = {pts: r.stats?.pts_ppr || 0, team: teamKey(r.team)};
+    const out = OUT.includes(r.player?.injury_status);
+    const p = {pts: out ? 0 : (r.stats?.pts_ppr || 0), team: teamKey(r.team), out};
     data.bySleeper[r.player_id] = p;
     if(r.player?.position === 'DEF') data.byDef[teamKey(r.team)] = p;
     else data.byName[normName(`${r.player?.first_name} ${r.player?.last_name}`)] = p;
